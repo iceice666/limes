@@ -1,1 +1,13 @@
 .direnv
+target
+frontend/dist
+frontend/node_modules
+frontend/playwright-report
+frontend/test-results
+examples/svelte/dist
+examples/svelte/node_modules
+examples/svelte/playwright-report
+examples/svelte/test-results
+*.tsbuildinfo
+examples/lock/node_modules
+examples/lock/dist
