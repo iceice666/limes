@@ -34,11 +34,8 @@ impl FrontendRunner {
     }
 
     pub fn run(&self, spec: &FrontendSpec, mode: FrontendMode) -> Result<ExitStatus> {
-        let FrontendSpec::External { program, args } = spec else {
-            return Err(LimesError::Frontend(
-                "builtin frontend is hosted by limes-cli and cannot be spawned".to_owned(),
-            ));
-        };
+        let program = &spec.program;
+        let args = &spec.args;
 
         let mut rendered = Vec::with_capacity(args.len() + 1);
         rendered.push(program.clone());

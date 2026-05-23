@@ -1,5 +1,5 @@
 {
-  description = "Log In Manager & Screenlock";
+  description = "Login manager and screenlock library for Rust frontends";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -30,21 +30,21 @@
           libxrandr
         ];
 
-        rustPackage = packageName: binName: pkgs.rustPlatform.buildRustPackage {
-          pname = binName;
+        simpleLock = pkgs.rustPlatform.buildRustPackage {
+          pname = "limes-simple-lock";
           version = "0.1.0";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
-          cargoBuildFlags = [ "-p" packageName ];
-          cargoTestFlags = [ "-p" packageName ];
+          cargoBuildFlags = [ "-p" "limes-simple-lock" ];
+          cargoTestFlags = [ "-p" "limes-simple-lock" ];
           nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = [ pkgs.pam ] ++ pkgs.lib.optionals (pkgs.lib.hasPrefix "limes-frontend-" packageName) guiRuntimeLibs;
+          buildInputs = [ pkgs.pam ] ++ guiRuntimeLibs;
         };
       in
       {
         packages = {
-          default = rustPackage "limes-cli" "limes";
-          limes = rustPackage "limes-cli" "limes";
+          default = simpleLock;
+          simple-lock = simpleLock;
         };
 
         devShells.default = pkgs.mkShell {

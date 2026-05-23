@@ -5,40 +5,34 @@ use limes_proto::{AuthSuccess, SessionSpec};
 use crate::error::{LimesError, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FrontendSpec {
-    /// Minimal text frontend built into `limes login`, useful for smoke tests.
-    BuiltinText,
-    /// Any executable. Webview/native frontends can be launched this way and may
-    /// link to `limes-core` themselves.
-    External { program: String, args: Vec<String> },
+pub struct FrontendSpec {
+    /// Executable for a login or lock frontend app.
+    pub program: String,
+    /// Extra arguments passed before `FrontendRunner` appends the mode argument.
+    pub args: Vec<String>,
 }
 
 impl FrontendSpec {
     #[must_use]
     pub fn external(program: impl Into<String>, args: Vec<String>) -> Self {
-        Self::External {
+        Self {
             program: program.into(),
             args,
         }
     }
 
     #[must_use]
-    pub fn command_line(&self) -> Option<Vec<String>> {
-        match self {
-            Self::BuiltinText => None,
-            Self::External { program, args } => {
-                let mut command = Vec::with_capacity(args.len() + 1);
-                command.push(program.clone());
-                command.extend(args.iter().cloned());
-                Some(command)
-            }
-        }
+    pub fn command_line(&self) -> Vec<String> {
+        let mut command = Vec::with_capacity(self.args.len() + 1);
+        command.push(self.program.clone());
+        command.extend(self.args.iter().cloned());
+        command
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub login_frontend: FrontendSpec,
+    pub login_frontend: Option<FrontendSpec>,
     pub lock_frontend: Option<FrontendSpec>,
     pub session_command: Vec<String>,
     pub max_auth_attempts: u8,
@@ -47,10 +41,9 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Result<Self> {
         let login_frontend = match env::var("LIMES_LOGIN_FRONTEND") {
-            Ok(value) if value.trim().is_empty() => FrontendSpec::BuiltinText,
-            Ok(value) if matches!(value.as_str(), "builtin" | "text") => FrontendSpec::BuiltinText,
-            Ok(value) => parse_external_command(&value)?,
-            Err(_) => FrontendSpec::BuiltinText,
+            Ok(value) if value.trim().is_empty() => None,
+            Ok(value) => Some(parse_external_command(&value)?),
+            Err(_) => None,
         };
         let lock_frontend = match env::var("LIMES_LOCK_FRONTEND") {
             Ok(value) if value.trim().is_empty() => None,
@@ -125,7 +118,7 @@ fn parse_external_command(value: &str) -> Result<FrontendSpec> {
 
 /// Tiny whitespace splitter for env-provided commands.
 ///
-/// Prefer CLI `--frontend PROGRAM -- ARGS...` for anything that needs quoting.
+/// Prefer constructing `FrontendSpec` in code for anything that needs quoting.
 fn split_words(value: &str) -> Vec<String> {
     value
         .split_whitespace()

@@ -1,4 +1,4 @@
-//! Backend library for limes.
+//! Login manager and screenlock library for limes frontends.
 //!
 //! This crate owns security-sensitive logic: authentication, lock state,
 //! PAM/session boundaries, and session launch. UI code should live in a frontend
@@ -13,6 +13,7 @@ pub mod lock;
 pub mod runtime;
 pub mod session;
 pub mod session_catalog;
+pub mod wayland_lock;
 
 pub use auth::{AuthBackend, PAM_SERVICE, PamAuth};
 pub use config::{Config, FrontendSpec};
@@ -22,3 +23,4 @@ pub use frontend::{FrontendMode, FrontendRunner};
 pub use lock::{DisplayBackend, LockManager, NoopDisplayBackend};
 pub use runtime::Runtime;
 pub use session::{LocalSessionBackend, SessionBackend, SessionManager};
+pub use wayland_lock::WaylandSessionLockBackend;

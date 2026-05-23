@@ -4,14 +4,13 @@ Guidance for coding agents working in this repository.
 
 ## Project overview
 
-`limes` is a Rust workspace for a Log In Manager & Screenlock.
+`limes` is a Rust workspace for a login manager and screenlock library.
 
-- `crates/limes-cli`: CLI binary named `limes`.
-- `crates/limes-core`: security-sensitive backend logic for auth, PAM/session boundaries, locking, frontend orchestration, config, and events.
-- `crates/limes-proto`: shared types/events for frontends and backend code.
-- `examples/limes-frontend-native`: starter native/text frontend executable.
+- `crates/limes-core`: the primary library, with security-sensitive backend logic for auth, PAM/session boundaries, locking, config, and events.
+- `crates/limes-proto`: lightweight shared types/events for frontends and backend code.
+- `examples/simple-lock`: minimal iced/layer-shell lock frontend example.
 
-Keep authentication, PAM/session handling, lock state, and session launch logic in `limes-core`. Frontends should render UI, collect input, and call backend APIs instead of duplicating auth/session logic.
+Keep authentication, PAM/session handling, lock state, and session launch logic in `limes-core`. Frontends should render UI, collect input, and call backend APIs instead of duplicating auth/session logic. There is no bundled CLI/app launcher crate.
 
 ## Development commands
 
@@ -22,11 +21,10 @@ cargo fmt --all
 cargo test --workspace
 ```
 
-Useful smoke test with the real PAM backend. Configure `/etc/pam.d/limes` first:
+Useful lock frontend smoke test with the real PAM backend. Configure `/etc/pam.d/limes` first and run under a Wayland compositor with `ext-session-lock-v1` support:
 
 ```sh
-export LIMES_SESSION_COMMAND="sh -c true"
-cargo run -p limes-cli -- login --builtin
+cargo run -p limes-simple-lock -- lock
 ```
 
 ## Nix
@@ -39,8 +37,7 @@ nix develop
 
 Package outputs include:
 
-- `.#limes`
-- `.#frontend-native`
+- `.#simple-lock`
 
 ## Coding notes
 
@@ -48,8 +45,8 @@ Package outputs include:
 - Do not log passwords or other secrets. `AuthRequest` debug output redacts the password; preserve that behavior.
 - Clear credential buffers after use where practical.
 - Keep `limes-proto` lightweight and dependency-minimal.
-- Treat the current lock display backend as a placeholder; do not imply it provides a real secure screen lock until an actual display/session-lock backend is implemented.
-- Environment-provided command parsing is intentionally simple whitespace splitting; prefer CLI arguments for commands needing quoting.
+- `Runtime` uses `WaylandSessionLockBackend` by default; `NoopDisplayBackend` is only a placeholder/test implementation. Do not imply non-Wayland or no-op backends provide a real secure screen lock.
+- Environment-provided command parsing is intentionally simple whitespace splitting; prefer API-provided command vectors for commands needing quoting.
 
 ## Git hygiene
 

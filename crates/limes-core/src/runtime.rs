@@ -9,9 +9,10 @@ use crate::config::{Config, FrontendSpec};
 use crate::error::{LimesError, Result};
 use crate::events::{EventBus, StderrEventSink};
 use crate::frontend::{FrontendMode, FrontendRunner};
-use crate::lock::{LockManager, NoopDisplayBackend};
+use crate::lock::LockManager;
 use crate::session::{LocalSessionBackend, SessionManager};
 use crate::session_catalog;
+use crate::wayland_lock::WaylandSessionLockBackend;
 
 pub struct Runtime {
     config: Config,
@@ -36,7 +37,7 @@ impl Runtime {
         let auth: Arc<dyn AuthBackend> = Arc::new(PamAuth::with_events(Some(events.clone())));
 
         let lock = LockManager::new(
-            Arc::new(NoopDisplayBackend),
+            Arc::new(WaylandSessionLockBackend::default()),
             Arc::clone(&auth),
             events.clone(),
         );
@@ -145,14 +146,23 @@ impl Runtime {
     }
 
     pub fn launch_login_frontend(&self) -> Result<i32> {
-        self.launch_frontend(&self.config.login_frontend, FrontendMode::Login)
+        let spec = self.config.login_frontend.as_ref().ok_or_else(|| {
+            LimesError::Config(
+                "no login frontend configured; set LIMES_LOGIN_FRONTEND or Config::login_frontend"
+                    .to_owned(),
+            )
+        })?;
+        self.launch_frontend(spec, FrontendMode::Login)
     }
 
-    pub fn launch_lock_frontend(&self) -> Result<Option<i32>> {
-        match &self.config.lock_frontend {
-            Some(spec) => self.launch_frontend(spec, FrontendMode::Lock).map(Some),
-            None => Ok(None),
-        }
+    pub fn launch_lock_frontend(&self) -> Result<i32> {
+        let spec = self.config.lock_frontend.as_ref().ok_or_else(|| {
+            LimesError::Config(
+                "no lock frontend configured; set LIMES_LOCK_FRONTEND or Config::lock_frontend"
+                    .to_owned(),
+            )
+        })?;
+        self.launch_frontend(spec, FrontendMode::Lock)
     }
 
     fn launch_frontend(&self, spec: &FrontendSpec, mode: FrontendMode) -> Result<i32> {

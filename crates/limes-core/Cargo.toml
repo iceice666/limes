@@ -1,6 +1,6 @@
 [package]
 name = "limes-core"
-description = "Backend authentication, lock, session, and frontend orchestration for limes."
+description = "Login manager and screenlock library for limes frontends."
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,8 @@ version.workspace = true
 [dependencies]
 libc = "0.2"
 limes-proto = { path = "../limes-proto" }
+smithay-client-toolkit = "0.19"
+wayland-client = "0.31"
 
 [lib]
 path = "src/lib.rs"

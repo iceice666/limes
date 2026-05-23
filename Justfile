@@ -2,12 +2,9 @@
 
 set dotenv-load
 
-# Crate-specific recipes.
-mod limes_cli "crates/limes-cli/Justfile"
-
 # List available recipes.
 default:
-    @just --list --list-submodules
+    @just --list
 
 # Format all Rust crates.
 fmt:
@@ -28,6 +25,10 @@ ci: fmt check test
 build:
     cargo build --workspace
 
+# Run the simple lock frontend example.
+simple-lock:
+    cargo run -p limes-simple-lock -- lock
+
 # Build all flake package outputs.
 nix-build:
-    nix build .#limes
+    nix build .#simple-lock

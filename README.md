@@ -1,83 +1,72 @@
 # limes
 
-Log In Manager & Screenlock.
+Login manager and screenlock library for Rust frontends.
 
-`limes` is intended to ship as a CLI:
+`limes-core` is the project: it owns authentication, PAM/session boundaries,
+Wayland session locking, session launch, config, and backend events. UI code is
+expected to live in frontend applications that render, collect input, and call
+`limes-core` APIs directly.
 
-```sh
-limes login   # called after boot by a service/DM unit
-limes lock    # lock the current session
-```
+There is no bundled CLI. Applications and examples link to `limes-core` instead
+of shelling out to a `limes` command.
 
 ## Architecture
 
-- `crates/limes-cli`: final CLI binary named `limes`.
-- `crates/limes-core`: backend library for auth, PAM/session boundaries, lock state,
-  session launch, frontend orchestration, config, and events.
-- `crates/limes-proto`: shared types/events used by frontends and backend code.
-- `examples/limes-frontend-native`: starter frontend executable and auth-process
-  example. Its login path uses a small text UI, and its lock path uses an iced
-  UI; both link to `limes-core` instead of owning PAM/session logic themselves.
-- `examples/limes-frontend-iced`: iced-rs login screen with a tinted glass design
-  over `examples/limes-frontend-iced/assets/bg.jpg`, idle lock state, password timeout, session selector, loading
-  animation, and failed-auth shake feedback.
+- `crates/limes-core`: login manager and screenlock library. Contains the
+  security-sensitive auth, PAM/session, lock, session launch, config, and event
+  orchestration.
+- `crates/limes-proto`: lightweight shared types/events for frontends and
+  backend/library code.
+- `examples/simple-lock`: minimal iced/layer-shell lock frontend that uses
+  `limes-core` for Wayland session locking and PAM unlock authentication.
 
-The security-sensitive path should stay in `limes-core`. Frontends should render
-UI, collect credentials, and call backend APIs.
+## Frontend integration
 
-## Auth process example
-
-Use `examples/limes-frontend-native/` as the reference for frontend-owned UI with
-backend-owned authentication:
+A login frontend should:
 
 1. Build a `Runtime` from environment/config with `Runtime::from_env()`.
-2. Collect username/password or PAM response in the frontend UI.
+2. Collect username/password or PAM responses in the frontend UI.
 3. Create an `AuthRequest` with `username`, `password`, and optional `tty`.
-4. Call `runtime.authenticate(&request)` for login verification, then clear the
-   secret with `request.clear_secret()`. For the PAM backend, each new auth
-   challenge first drops any previous authenticated-but-unopened PAM transaction
-   so prompts start with a fresh PAM handle.
-5. On successful login, call `runtime.start_session_for(&success)`, wait with
-   `runtime.wait_session(&handle)`, and let `limes-core` handle PAM session
-   open/close plus user context switching.
+4. Call `runtime.authenticate(&request)`, then clear the secret with
+   `request.clear_secret()`.
+5. On success, call `runtime.start_session_for(&success)` or
+   `runtime.start_session_for_with_command(&success, command)`, then
+   `runtime.wait_session(&handle)` so `limes-core` handles PAM session
+   open/close and user context switching.
 
-For lock/unlock UI, the same crate shows how to subscribe to PAM prompt events
-with `runtime.events().subscribe(...)`, collect a password or empty response for
-fingerprint/PAM flows, and verify via the backend while keeping secret handling
-out of the renderer logic.
+A lock frontend should:
 
-## Development smoke test
+1. Build a `Runtime` with `Runtime::from_env()`.
+2. Call `runtime.lock_now()` when it is responsible for entering the lock.
+3. Render the locked UI and collect unlock credentials.
+4. Call `runtime.unlock(&request)`, then clear the secret.
 
-The default auth backend is PAM (`LIMES_PAM_SERVICE=limes`). Install a matching
-`/etc/pam.d/limes` policy first. For local testing only, bypass PAM with:
+On Wayland, `limes-core` uses `ext-session-lock-v1` through
+`WaylandSessionLockBackend` to ask the compositor to secure the session. The
+backend keeps lock surfaces alive while the frontend owns the user-facing lock UI.
 
-```sh
-export LIMES_AUTH_BACKEND=dev
-export LIMES_DEV_PASSWORD=secret
-export LIMES_SESSION_COMMAND="sh -c true"
-cargo run -p limes-cli -- login --builtin
-```
+## Example
 
-External frontend launch examples:
+Configure `/etc/pam.d/limes` before testing PAM-backed auth. Then run the lock
+frontend example under a Wayland compositor with `ext-session-lock-v1` support:
 
 ```sh
-cargo run -p limes-cli -- login --frontend target/debug/limes-frontend-native -- login
-
-# Full-screen by default. Set LIMES_ICED_WINDOWED=1 for a normal debug window.
-cargo build -p limes-frontend-iced
-LIMES_ICED_WINDOWED=1 cargo run -p limes-cli -- login --frontend target/debug/limes-frontend-iced -- login
+cargo run -p limes-simple-lock -- lock
 ```
-
-The iced frontend closes its login window after a successful verification once
-the session is started, then waits for the session to exit so `limes-core` can
-close the backend auth/PAM session.
 
 Session choices are provided by `limes-core` from system `.desktop` files in
-`wayland-sessions`/`xsessions`. Extra backend session entries can be supplied
+`wayland-sessions` and `xsessions`. Extra backend session entries can be supplied
 with a semicolon-separated list:
 
 ```sh
 export LIMES_SESSIONS='Lab Shell=/bin/sh;Sway=sway'
+```
+
+## Development
+
+```sh
+cargo fmt --all
+cargo test --workspace
 ```
 
 ## Acknowledgements

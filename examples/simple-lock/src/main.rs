@@ -1,61 +1,99 @@
 use std::sync::Arc;
 
-use iced::widget::{button, column, container, row, text, text_input};
-use iced::{Alignment, Element, Fill, Task, Theme};
-use limes_core::{DisplayBackend, EventBus, LockManager, PamAuth, Result, StderrEventSink};
-use limes_proto::{AuthFailure, AuthOutcome, AuthRequest, LockState};
+use iced::{
+    Alignment, Element, Length, Task,
+    widget::{button, column, container, row, text, text_input},
+};
+use iced_layershell::{
+    actions::LayerShellCustomActionWithId,
+    application,
+    reexport::Anchor,
+    settings::{LayerShellSettings, Settings},
+};
+use limes_core::{Runtime, StderrEventSink};
 
-fn main() -> iced::Result {
-    iced::application("limes simple lock", SimpleLock::update, SimpleLock::view)
-        .theme(|_| Theme::Dark)
-        .run_with(SimpleLock::new)
+use limes_proto::{AuthFailure as ProtoAuthFailure, AuthOutcome, AuthRequest, LockState};
+
+fn main() -> iced_layershell::Result {
+    application(
+        SimpleLock::new,
+        || "limes simple lock".to_owned(),
+        SimpleLock::update,
+        SimpleLock::view,
+    )
+    .settings(Settings {
+        layer_settings: LayerShellSettings {
+            anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .run()
 }
 
 struct SimpleLock {
-    manager: Arc<LockManager>,
+    runtime: Option<Arc<Runtime>>,
     username: String,
     password: String,
     state: LockState,
     status: String,
     authenticating: bool,
+    lock_frontend: bool,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    UsernameChanged(String),
     PasswordChanged(String),
     Lock,
     Submit,
     AuthFinished(AuthOutcome),
 }
 
+impl TryFrom<Message> for LayerShellCustomActionWithId {
+    type Error = Message;
+
+    fn try_from(value: Message) -> std::result::Result<Self, Self::Error> {
+        Err(value)
+    }
+}
+
 impl SimpleLock {
     fn new() -> (Self, Task<Message>) {
-        let events = EventBus::new();
-        events.subscribe(Arc::new(StderrEventSink));
+        let lock_frontend = matches!(std::env::args().nth(1).as_deref(), Some("lock"));
+        let runtime = Runtime::from_env().ok().map(Arc::new);
 
-        let manager = Arc::new(LockManager::new(
-            Arc::new(DemoDisplayBackend),
-            Arc::new(PamAuth::with_events(Some(events.clone()))),
-            events,
-        ));
-
-        let initial_state = match manager.lock_now() {
-            Ok(()) => LockState::Locked,
-            Err(error) => {
-                eprintln!("failed to enter demo lock state: {error}");
-                LockState::Unlocked
+        let (initial_state, status) = if let Some(runtime) = &runtime {
+            runtime.events().subscribe(Arc::new(StderrEventSink));
+            if lock_frontend {
+                match runtime.lock_now() {
+                    Ok(()) => (
+                        LockState::Locked,
+                        "Locked. Enter your PAM password and press Enter to unlock.".to_owned(),
+                    ),
+                    Err(error) => (LockState::Unlocked, format!("Could not lock: {error}")),
+                }
+            } else {
+                (
+                    LockState::Unlocked,
+                    "Runtime ready. Press \"Lock again\" to begin a lock test.".to_owned(),
+                )
             }
+        } else {
+            (
+                LockState::Unlocked,
+                "Runtime unavailable. Cannot initialize lock backend.".to_owned(),
+            )
         };
 
         (
             Self {
-                manager,
+                runtime,
                 username: std::env::var("USER").unwrap_or_default(),
                 password: String::new(),
                 state: initial_state,
-                status: "Demo lock active. Enter your PAM password to unlock.".to_owned(),
+                status,
                 authenticating: false,
+                lock_frontend,
             },
             Task::none(),
         )
@@ -63,34 +101,38 @@ impl SimpleLock {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::UsernameChanged(username) => {
-                self.username = username;
-                Task::none()
-            }
             Message::PasswordChanged(password) => {
                 self.password = password;
                 Task::none()
             }
             Message::Lock => {
+                if self.runtime.is_none() {
+                    self.status = "Runtime unavailable; lock not possible.".to_owned();
+                    return Task::none();
+                }
+
                 self.password.clear();
-                match self.manager.lock_now() {
+                let runtime = Arc::clone(self.runtime.as_ref().expect("runtime present"));
+                match runtime.lock_now() {
                     Ok(()) => {
                         self.state = LockState::Locked;
-                        self.status = "Locked. Enter your password to unlock.".to_owned();
+                        self.status =
+                            "Locked. Enter your password and press Enter to unlock.".to_owned();
                     }
                     Err(error) => {
-                        self.state = self.manager.state().unwrap_or(LockState::Unlocked);
+                        self.state = LockState::Unlocked;
                         self.status = format!("Could not lock: {error}");
                     }
                 }
                 Task::none()
             }
             Message::Submit => {
-                if self.authenticating || self.state != LockState::Locked {
+                if self.runtime.is_none() || self.authenticating || self.state != LockState::Locked
+                {
                     return Task::none();
                 }
 
-                let manager = Arc::clone(&self.manager);
+                let runtime = Arc::clone(self.runtime.as_ref().expect("runtime present"));
                 let username = self.username.clone();
                 let password = std::mem::take(&mut self.password);
                 self.authenticating = true;
@@ -100,7 +142,7 @@ impl SimpleLock {
                 Task::perform(
                     async move {
                         let mut request = AuthRequest::new(username, password);
-                        let outcome = manager.unlock(&request);
+                        let outcome = runtime.unlock(&request);
                         request.clear_secret();
                         outcome
                     },
@@ -127,16 +169,14 @@ impl SimpleLock {
 
     fn view(&self) -> Element<'_, Message> {
         let title = text("limes simple lock").size(36);
-        let warning =
-            text("Example only: this window does not provide a secure compositor/session lock.")
-                .size(16);
+        let warning = text(
+            "Uses Wayland ext-session-lock-v1 via limes-core. The compositor lock surface is currently delegated to the frontend.",
+        )
+        .size(16);
         let state = text(format!("State: {}", self.state)).size(20);
         let status = text(&self.status).size(18);
 
-        let username = text_input("username", &self.username)
-            .on_input(Message::UsernameChanged)
-            .padding(12)
-            .size(20);
+        let username = text(format!("User: {}", self.username)).size(20);
 
         let password = text_input("password", &self.password)
             .on_input(Message::PasswordChanged)
@@ -157,7 +197,12 @@ impl SimpleLock {
             button("Lock again")
         };
 
-        let controls = row![unlock, lock_again].spacing(12);
+        let controls = if self.lock_frontend {
+            row![unlock]
+        } else {
+            row![unlock, lock_again]
+        }
+        .spacing(12);
 
         let content = column![title, warning, state, username, password, controls, status]
             .spacing(16)
@@ -166,32 +211,21 @@ impl SimpleLock {
             .max_width(520);
 
         container(content)
-            .width(Fill)
-            .height(Fill)
-            .center_x(Fill)
-            .center_y(Fill)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
             .into()
     }
 }
 
-fn auth_error_message(error: &AuthFailure) -> String {
+fn auth_error_message(error: &ProtoAuthFailure) -> String {
     match error {
-        AuthFailure::InvalidCredentials => "Invalid username or password.".to_owned(),
-        AuthFailure::LockedOut => "Account is locked out.".to_owned(),
-        AuthFailure::BackendUnavailable(reason) => format!("PAM backend unavailable: {reason}"),
-        AuthFailure::Internal(reason) => format!("Authentication error: {reason}"),
-    }
-}
-
-#[derive(Debug, Default)]
-struct DemoDisplayBackend;
-
-impl DisplayBackend for DemoDisplayBackend {
-    fn lock(&self) -> Result<()> {
-        Ok(())
-    }
-
-    fn unlock(&self) -> Result<()> {
-        Ok(())
+        ProtoAuthFailure::InvalidCredentials => "Invalid username or password.".to_owned(),
+        ProtoAuthFailure::LockedOut => "Account is locked out.".to_owned(),
+        ProtoAuthFailure::BackendUnavailable(reason) => {
+            format!("PAM backend unavailable: {reason}")
+        }
+        ProtoAuthFailure::Internal(reason) => format!("Authentication error: {reason}"),
     }
 }

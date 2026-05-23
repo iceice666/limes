@@ -1,6 +1,6 @@
 [package]
 name = "limes-proto"
-description = "Shared protocol/types for limes frontends and backend code."
+description = "Lightweight shared types and events for limes frontends and core."
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
