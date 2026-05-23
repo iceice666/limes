@@ -48,10 +48,39 @@ impl PamAuth {
             events,
         }
     }
+
+    /// Drops authenticated PAM transactions that have not been opened as login
+    /// sessions yet. This gives every new auth challenge a fresh PAM handle
+    /// without tearing down already-opened sessions that must later be closed
+    /// through `close_session`.
+    fn cleanup_pending_auth_state(&self) -> Result<()> {
+        let pending = {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .map_err(|_| LimesError::Auth("PAM session map mutex poisoned".to_owned()))?;
+            let pending_ids = sessions
+                .iter()
+                .filter(|(_, session)| !session.is_open())
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>();
+
+            pending_ids
+                .into_iter()
+                .filter_map(|id| sessions.remove(&id))
+                .collect::<Vec<_>>()
+        };
+
+        drop(pending);
+        Ok(())
+    }
 }
 
 impl AuthBackend for PamAuth {
     fn authenticate(&self, request: &AuthRequest) -> AuthOutcome {
+        self.cleanup_pending_auth_state()
+            .map_err(internal_failure)?;
+
         let service = CString::new(self.service.as_str()).map_err(internal_failure)?;
         let username = CString::new(request.username.as_str()).map_err(internal_failure)?;
         let password = CString::new(request.password.as_str()).map_err(internal_failure)?;
@@ -193,6 +222,10 @@ impl PamSession {
             opened: false,
             last_status: pam::PAM_SUCCESS,
         }
+    }
+
+    fn is_open(&self) -> bool {
+        self.opened
     }
 
     fn open(&mut self) -> Result<()> {

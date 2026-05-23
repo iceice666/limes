@@ -15,11 +15,11 @@ limes lock    # lock the current session
 - `crates/limes-core`: backend library for auth, PAM/session boundaries, lock state,
   session launch, frontend orchestration, config, and events.
 - `crates/limes-proto`: shared types/events used by frontends and backend code.
-- `crates/limes-frontend-native`: starter frontend executable and auth-process
+- `examples/limes-frontend-native`: starter frontend executable and auth-process
   example. Its login path uses a small text UI, and its lock path uses an iced
   UI; both link to `limes-core` instead of owning PAM/session logic themselves.
-- `crates/limes-frontend-iced`: iced-rs login screen with a tinted glass design
-  over `crates/limes-frontend-iced/assets/bg.jpg`, idle lock state, password timeout, session selector, loading
+- `examples/limes-frontend-iced`: iced-rs login screen with a tinted glass design
+  over `examples/limes-frontend-iced/assets/bg.jpg`, idle lock state, password timeout, session selector, loading
   animation, and failed-auth shake feedback.
 
 The security-sensitive path should stay in `limes-core`. Frontends should render
@@ -27,14 +27,16 @@ UI, collect credentials, and call backend APIs.
 
 ## Auth process example
 
-Use `crates/limes-frontend-native/` as the reference for frontend-owned UI with
+Use `examples/limes-frontend-native/` as the reference for frontend-owned UI with
 backend-owned authentication:
 
 1. Build a `Runtime` from environment/config with `Runtime::from_env()`.
 2. Collect username/password or PAM response in the frontend UI.
 3. Create an `AuthRequest` with `username`, `password`, and optional `tty`.
 4. Call `runtime.authenticate(&request)` for login verification, then clear the
-   secret with `request.clear_secret()`.
+   secret with `request.clear_secret()`. For the PAM backend, each new auth
+   challenge first drops any previous authenticated-but-unopened PAM transaction
+   so prompts start with a fresh PAM handle.
 5. On successful login, call `runtime.start_session_for(&success)`, wait with
    `runtime.wait_session(&handle)`, and let `limes-core` handle PAM session
    open/close plus user context switching.
@@ -66,8 +68,9 @@ cargo build -p limes-frontend-iced
 LIMES_ICED_WINDOWED=1 cargo run -p limes-cli -- login --frontend target/debug/limes-frontend-iced -- login
 ```
 
-The iced frontend exits after a successful verification once the session is
-started. Set `LIMES_ICED_WAIT_SESSION=1` to keep it alive until the session exits.
+The iced frontend closes its login window after a successful verification once
+the session is started, then waits for the session to exit so `limes-core` can
+close the backend auth/PAM session.
 
 Session choices are provided by `limes-core` from system `.desktop` files in
 `wayland-sessions`/`xsessions`. Extra backend session entries can be supplied
@@ -82,6 +85,10 @@ export LIMES_SESSIONS='Lab Shell=/bin/sh;Sway=sway'
 The direct PAM login/session flow is informed by [Ly](https://github.com/fairyglade/ly):
 `pam_start`, `PAM_TTY`, `pam_authenticate`, `pam_acct_mgmt`, `pam_setcred`,
 `pam_open_session`, PAM environment import, user context switch, and parent-side
-session waiting/cleanup. The lock authentication path follows [swaylock](https://github.com/swaywm/swaylock)'s
-model of a small PAM conversation that answers password prompts and maps PAM
-errors into frontend-renderable failures.
+session waiting/cleanup. Before starting a new PAM auth challenge, `limes-core`
+cleans up any prior PAM transaction that has not yet been opened as a login
+session; already-opened sessions remain owned by the returned session handle and
+are closed during normal session cleanup. The lock authentication path follows
+[swaylock](https://github.com/swaywm/swaylock)'s model of a small PAM
+conversation that answers password prompts and maps PAM errors into
+frontend-renderable failures.

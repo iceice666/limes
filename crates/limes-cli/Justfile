@@ -1,0 +1,9 @@
+set dotenv-load
+
+# Build the CLI crate.
+build:
+    cargo build -p limes-cli
+
+# Run the builtin text login command.
+login:
+    cargo run -p limes-cli -- login --builtin

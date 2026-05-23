@@ -38,14 +38,13 @@
           cargoBuildFlags = [ "-p" packageName ];
           cargoTestFlags = [ "-p" packageName ];
           nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = [ pkgs.pam ] ++ pkgs.lib.optionals (packageName == "limes-frontend-native") guiRuntimeLibs;
+          buildInputs = [ pkgs.pam ] ++ pkgs.lib.optionals (pkgs.lib.hasPrefix "limes-frontend-" packageName) guiRuntimeLibs;
         };
       in
       {
         packages = {
           default = rustPackage "limes-cli" "limes";
           limes = rustPackage "limes-cli" "limes";
-          frontend-native = rustPackage "limes-frontend-native" "limes-frontend-native";
         };
 
         devShells.default = pkgs.mkShell {

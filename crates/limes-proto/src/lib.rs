@@ -108,6 +108,30 @@ impl fmt::Display for LockState {
     }
 }
 
+/// Frontend-renderable session choice supplied by the backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionChoice {
+    pub name: String,
+    /// `None` means use the backend default from `Config::session_spec_for`.
+    pub command: Option<Vec<String>>,
+}
+
+impl SessionChoice {
+    #[must_use]
+    pub fn default_session() -> Self {
+        Self {
+            name: "Default session".to_owned(),
+            command: None,
+        }
+    }
+}
+
+impl fmt::Display for SessionChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
 /// Command and environment used to start a user session after login.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSpec {

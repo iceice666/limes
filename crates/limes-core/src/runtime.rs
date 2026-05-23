@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use limes_proto::{AuthFailure, AuthOutcome, AuthRequest, AuthSuccess, LimesEvent, SessionHandle};
+use limes_proto::{
+    AuthFailure, AuthOutcome, AuthRequest, AuthSuccess, LimesEvent, SessionChoice, SessionHandle,
+};
 
 use crate::auth::{AuthBackend, DenyAllAuth, DevAuth, PamAuth};
 use crate::config::{AuthBackendKind, Config, FrontendSpec};
@@ -9,6 +11,7 @@ use crate::events::{EventBus, StderrEventSink};
 use crate::frontend::{FrontendMode, FrontendRunner};
 use crate::lock::{LockManager, NoopDisplayBackend};
 use crate::session::{LocalSessionBackend, SessionManager};
+use crate::session_catalog;
 
 pub struct Runtime {
     config: Config,
@@ -86,9 +89,41 @@ impl Runtime {
         outcome
     }
 
+    #[must_use]
+    pub fn available_sessions(&self) -> Vec<SessionChoice> {
+        session_catalog::discover_available_sessions()
+    }
+
     pub fn start_session_for(&self, success: &AuthSuccess) -> Result<SessionHandle> {
+        self.start_session_for_command_override(success, None)
+    }
+
+    /// Starts a session with a frontend-selected command while keeping PAM and
+    /// user context switching inside `limes-core`.
+    pub fn start_session_for_with_command(
+        &self,
+        success: &AuthSuccess,
+        command: Vec<String>,
+    ) -> Result<SessionHandle> {
+        if command.is_empty() {
+            return Err(LimesError::Session(
+                "selected session command is empty".to_owned(),
+            ));
+        }
+
+        self.start_session_for_command_override(success, Some(command))
+    }
+
+    fn start_session_for_command_override(
+        &self,
+        success: &AuthSuccess,
+        command: Option<Vec<String>>,
+    ) -> Result<SessionHandle> {
         let pam_env = self.auth.open_session(success)?;
         let mut spec = self.config.session_spec_for(success);
+        if let Some(command) = command {
+            spec.command = command;
+        }
         spec.env.extend(pam_env);
         match self.sessions.start(&spec) {
             Ok(handle) => Ok(handle),

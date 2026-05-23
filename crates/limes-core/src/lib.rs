@@ -12,6 +12,7 @@ pub mod frontend;
 pub mod lock;
 pub mod runtime;
 pub mod session;
+pub mod session_catalog;
 
 pub use auth::{AuthBackend, DenyAllAuth, DevAuth, PamAuth};
 pub use config::{AuthBackendKind, Config, FrontendSpec};

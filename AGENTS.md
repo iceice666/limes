@@ -9,7 +9,7 @@ Guidance for coding agents working in this repository.
 - `crates/limes-cli`: CLI binary named `limes`.
 - `crates/limes-core`: security-sensitive backend logic for auth, PAM/session boundaries, locking, frontend orchestration, config, and events.
 - `crates/limes-proto`: shared types/events for frontends and backend code.
-- `crates/limes-frontend-native`: starter native/text frontend executable.
+- `examples/limes-frontend-native`: starter native/text frontend executable.
 
 Keep authentication, PAM/session handling, lock state, and session launch logic in `limes-core`. Frontends should render UI, collect input, and call backend APIs instead of duplicating auth/session logic.
 
