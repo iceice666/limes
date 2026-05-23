@@ -22,11 +22,9 @@ cargo fmt --all
 cargo test --workspace
 ```
 
-Useful smoke test with the development auth backend:
+Useful smoke test with the real PAM backend. Configure `/etc/pam.d/limes` first:
 
 ```sh
-export LIMES_AUTH_BACKEND=dev
-export LIMES_DEV_PASSWORD=secret
 export LIMES_SESSION_COMMAND="sh -c true"
 cargo run -p limes-cli -- login --builtin
 ```

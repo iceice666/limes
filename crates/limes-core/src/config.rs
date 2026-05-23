@@ -5,18 +5,6 @@ use limes_proto::{AuthSuccess, SessionSpec};
 use crate::error::{LimesError, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AuthBackendKind {
-    /// Production target backed by Linux-PAM.
-    Pam,
-    /// Explicit development backend. Enable with `LIMES_AUTH_BACKEND=dev` and
-    /// set `LIMES_DEV_PASSWORD`.
-    DevPassword {
-        password: String,
-    },
-    DenyAll,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrontendSpec {
     /// Minimal text frontend built into `limes login`, useful for smoke tests.
     BuiltinText,
@@ -50,8 +38,6 @@ impl FrontendSpec {
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub auth_backend: AuthBackendKind,
-    pub pam_service: String,
     pub login_frontend: FrontendSpec,
     pub lock_frontend: Option<FrontendSpec>,
     pub session_command: Vec<String>,
@@ -60,25 +46,6 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let auth_backend = match env::var("LIMES_AUTH_BACKEND").as_deref() {
-            Ok("dev") => {
-                let password = env::var("LIMES_DEV_PASSWORD").map_err(|_| {
-                    LimesError::Config(
-                        "LIMES_AUTH_BACKEND=dev requires LIMES_DEV_PASSWORD".to_owned(),
-                    )
-                })?;
-                AuthBackendKind::DevPassword { password }
-            }
-            Ok("deny") => AuthBackendKind::DenyAll,
-            Ok("pam") | Err(_) => AuthBackendKind::Pam,
-            Ok(other) => {
-                return Err(LimesError::Config(format!(
-                    "unknown LIMES_AUTH_BACKEND `{other}`; expected pam, dev, or deny"
-                )));
-            }
-        };
-
-        let pam_service = env::var("LIMES_PAM_SERVICE").unwrap_or_else(|_| "limes".to_owned());
         let login_frontend = match env::var("LIMES_LOGIN_FRONTEND") {
             Ok(value) if value.trim().is_empty() => FrontendSpec::BuiltinText,
             Ok(value) if matches!(value.as_str(), "builtin" | "text") => FrontendSpec::BuiltinText,
@@ -101,8 +68,6 @@ impl Config {
             .max(1);
 
         Ok(Self {
-            auth_backend,
-            pam_service,
             login_frontend,
             lock_frontend,
             session_command,

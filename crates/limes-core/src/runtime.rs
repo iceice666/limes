@@ -4,8 +4,8 @@ use limes_proto::{
     AuthFailure, AuthOutcome, AuthRequest, AuthSuccess, LimesEvent, SessionChoice, SessionHandle,
 };
 
-use crate::auth::{AuthBackend, DenyAllAuth, DevAuth, PamAuth};
-use crate::config::{AuthBackendKind, Config, FrontendSpec};
+use crate::auth::{AuthBackend, PamAuth};
+use crate::config::{Config, FrontendSpec};
 use crate::error::{LimesError, Result};
 use crate::events::{EventBus, StderrEventSink};
 use crate::frontend::{FrontendMode, FrontendRunner};
@@ -33,14 +33,7 @@ impl Runtime {
             events.subscribe(Arc::new(StderrEventSink));
         }
 
-        let auth: Arc<dyn AuthBackend> = match &config.auth_backend {
-            AuthBackendKind::Pam => Arc::new(PamAuth::with_events(
-                config.pam_service.clone(),
-                Some(events.clone()),
-            )),
-            AuthBackendKind::DevPassword { password } => Arc::new(DevAuth::new(password.clone())),
-            AuthBackendKind::DenyAll => Arc::new(DenyAllAuth),
-        };
+        let auth: Arc<dyn AuthBackend> = Arc::new(PamAuth::with_events(Some(events.clone())));
 
         let lock = LockManager::new(
             Arc::new(NoopDisplayBackend),

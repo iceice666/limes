@@ -214,8 +214,7 @@ Usage:\n\
   limes login [--builtin | --frontend PROGRAM [-- ARGS...]]\n\
   limes lock\n\n\
 Environment:\n\
-  LIMES_AUTH_BACKEND=pam|dev|deny   (default: pam)\n\
-  LIMES_DEV_PASSWORD=secret         required for dev backend\n\
+  PAM service is always `limes`; configure /etc/pam.d/limes\n\
   LIMES_LOGIN_FRONTEND='cmd args'   default login frontend\n\
   LIMES_LOCK_FRONTEND='cmd args'    optional lock frontend\n\
   LIMES_SESSION_COMMAND='cmd args'  command after successful login\n\

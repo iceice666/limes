@@ -9,6 +9,8 @@ use limes_proto::{AuthFailure, AuthOutcome, AuthRequest, AuthSuccess, LimesEvent
 use crate::error::{LimesError, Result};
 use crate::events::EventBus;
 
+pub const PAM_SERVICE: &str = "limes";
+
 pub trait AuthBackend: Send + Sync {
     fn authenticate(&self, request: &AuthRequest) -> AuthOutcome;
     fn open_session(&self, user: &AuthSuccess) -> Result<Vec<(String, String)>>;
@@ -16,7 +18,7 @@ pub trait AuthBackend: Send + Sync {
 }
 
 pub struct PamAuth {
-    service: String,
+    service: &'static str,
     sessions: Mutex<HashMap<String, PamSession>>,
     next_session_id: AtomicU64,
     events: Option<EventBus>,
@@ -35,14 +37,14 @@ impl std::fmt::Debug for PamAuth {
 
 impl PamAuth {
     #[must_use]
-    pub fn new(service: impl Into<String>) -> Self {
-        Self::with_events(service, None)
+    pub fn new() -> Self {
+        Self::with_events(None)
     }
 
     #[must_use]
-    pub fn with_events(service: impl Into<String>, events: Option<EventBus>) -> Self {
+    pub fn with_events(events: Option<EventBus>) -> Self {
         Self {
-            service: service.into(),
+            service: PAM_SERVICE,
             sessions: Mutex::new(HashMap::new()),
             next_session_id: AtomicU64::new(1),
             events,
@@ -81,7 +83,7 @@ impl AuthBackend for PamAuth {
         self.cleanup_pending_auth_state()
             .map_err(internal_failure)?;
 
-        let service = CString::new(self.service.as_str()).map_err(internal_failure)?;
+        let service = CString::new(self.service).map_err(internal_failure)?;
         let username = CString::new(request.username.as_str()).map_err(internal_failure)?;
         let password = CString::new(request.password.as_str()).map_err(internal_failure)?;
         let tty = request
@@ -280,73 +282,6 @@ impl Drop for PamSession {
             pam::pam_end(self.handle, self.last_status);
         }
         self.handle = ptr::null_mut();
-    }
-}
-
-/// Development-only backend. Never enable this in a real display manager.
-#[derive(Debug, Clone)]
-pub struct DevAuth {
-    password: String,
-}
-
-impl DevAuth {
-    #[must_use]
-    pub fn new(password: impl Into<String>) -> Self {
-        Self {
-            password: password.into(),
-        }
-    }
-}
-
-impl AuthBackend for DevAuth {
-    fn authenticate(&self, request: &AuthRequest) -> AuthOutcome {
-        if request.password != self.password {
-            return Err(AuthFailure::InvalidCredentials);
-        }
-
-        let user = lookup_user(&request.username).unwrap_or_else(|| UserRecord {
-            username: request.username.clone(),
-            uid: 1000,
-            gid: 1000,
-            home: Some(format!("/home/{}", request.username)),
-            shell: Some("/bin/sh".to_owned()),
-        });
-
-        Ok(AuthSuccess {
-            username: user.username,
-            uid: user.uid,
-            gid: user.gid,
-            home: user.home,
-            shell: user.shell,
-            auth_session_id: None,
-        })
-    }
-
-    fn open_session(&self, _user: &AuthSuccess) -> Result<Vec<(String, String)>> {
-        Ok(Vec::new())
-    }
-
-    fn close_session(&self, _auth_session_id: Option<&str>) -> Result<()> {
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct DenyAllAuth;
-
-impl AuthBackend for DenyAllAuth {
-    fn authenticate(&self, _request: &AuthRequest) -> AuthOutcome {
-        Err(AuthFailure::InvalidCredentials)
-    }
-
-    fn open_session(&self, _user: &AuthSuccess) -> Result<Vec<(String, String)>> {
-        Err(LimesError::Auth(
-            "deny-all backend cannot open sessions".to_owned(),
-        ))
-    }
-
-    fn close_session(&self, _auth_session_id: Option<&str>) -> Result<()> {
-        Ok(())
     }
 }
 

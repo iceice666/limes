@@ -72,9 +72,17 @@ impl LockManager {
             return Err(limes_proto::AuthFailure::Internal(error.to_string()));
         }
 
+        self.events.emit(LimesEvent::AuthStarted {
+            username: request.username.clone(),
+        });
+
         let outcome = self.auth.authenticate(request);
         match &outcome {
             Ok(success) => {
+                self.events.emit(LimesEvent::AuthSucceeded {
+                    username: success.username.clone(),
+                    uid: success.uid,
+                });
                 let display_result = self.display.unlock();
                 let _ = self.auth.close_session(success.auth_session_id.as_deref());
                 if let Err(error) = display_result {
@@ -83,7 +91,11 @@ impl LockManager {
                 }
                 self.set_state_lossy(LockState::Unlocked);
             }
-            Err(_) => {
+            Err(reason) => {
+                self.events.emit(LimesEvent::AuthFailed {
+                    username: request.username.clone(),
+                    reason: reason.to_string(),
+                });
                 self.set_state_lossy(LockState::Locked);
             }
         }

@@ -14,8 +14,8 @@ pub mod runtime;
 pub mod session;
 pub mod session_catalog;
 
-pub use auth::{AuthBackend, DenyAllAuth, DevAuth, PamAuth};
-pub use config::{AuthBackendKind, Config, FrontendSpec};
+pub use auth::{AuthBackend, PAM_SERVICE, PamAuth};
+pub use config::{Config, FrontendSpec};
 pub use error::{LimesError, Result};
 pub use events::{EventBus, EventSink, StderrEventSink};
 pub use frontend::{FrontendMode, FrontendRunner};
