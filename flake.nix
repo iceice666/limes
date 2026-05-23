@@ -30,21 +30,25 @@
           libxrandr
         ];
 
-        simpleLock = pkgs.rustPlatform.buildRustPackage {
-          pname = "limes-simple-lock";
+        mkExample = pname: pkgs.rustPlatform.buildRustPackage {
+          inherit pname;
           version = "0.1.0";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
-          cargoBuildFlags = [ "-p" "limes-simple-lock" ];
-          cargoTestFlags = [ "-p" "limes-simple-lock" ];
+          cargoBuildFlags = [ "-p" pname ];
+          cargoTestFlags = [ "-p" pname ];
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ pkgs.pam ] ++ guiRuntimeLibs;
         };
+
+        simpleLock = mkExample "limes-simple-lock";
+        fullScreenlock = mkExample "limes-full-screenlock";
       in
       {
         packages = {
           default = simpleLock;
           simple-lock = simpleLock;
+          full-screenlock = fullScreenlock;
         };
 
         devShells.default = pkgs.mkShell {

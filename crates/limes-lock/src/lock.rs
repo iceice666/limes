@@ -93,6 +93,22 @@ impl LockManager {
     }
 
     pub fn unlock(&self, request: &AuthRequest) -> AuthOutcome {
+        self.authenticate_unlock_inner(request, true)
+    }
+
+    /// Authenticates an unlock request without calling the display backend.
+    ///
+    /// This is for frontends that own the compositor lock surface themselves
+    /// and will release it after successful authentication.
+    pub fn authenticate_unlock(&self, request: &AuthRequest) -> AuthOutcome {
+        self.authenticate_unlock_inner(request, false)
+    }
+
+    fn authenticate_unlock_inner(
+        &self,
+        request: &AuthRequest,
+        release_display: bool,
+    ) -> AuthOutcome {
         if let Err(error) = self.set_state(LockState::Unlocking) {
             self.set_state_lossy(LockState::Locked);
             return Err(limes_proto::AuthFailure::Internal(error.to_string()));
@@ -109,7 +125,11 @@ impl LockManager {
                     username: success.username.clone(),
                     uid: success.uid,
                 });
-                let display_result = self.display.unlock();
+                let display_result = if release_display {
+                    self.display.unlock()
+                } else {
+                    Ok(())
+                };
                 let _ = self.auth.close_session(success.auth_session_id.as_deref());
                 if let Err(error) = display_result {
                     self.set_state_lossy(LockState::Locked);

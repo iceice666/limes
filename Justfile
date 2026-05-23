@@ -29,6 +29,14 @@ build:
 simple-lock:
     cargo run -p limes-simple-lock -- lock
 
+# Run the full-screen session-lock frontend example.
+full-screenlock:
+    cargo run -p limes-full-screenlock -- lock
+
+# Preview the full-screen lock UI without locking the session.
+full-screenlock-preview:
+    cargo run -p limes-full-screenlock -- preview
+
 # Build all flake package outputs.
 nix-build:
     nix build .#simple-lock

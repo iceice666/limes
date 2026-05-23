@@ -12,11 +12,12 @@ use smithay_client_toolkit::{
         SessionLock, SessionLockHandler, SessionLockState, SessionLockSurface,
         SessionLockSurfaceConfigure,
     },
+    shm::{Shm, ShmHandler, raw::RawPool},
 };
 use wayland_client::{
     Connection, QueueHandle,
     globals::registry_queue_init,
-    protocol::{wl_output, wl_surface},
+    protocol::{wl_buffer, wl_output, wl_shm, wl_surface},
 };
 
 use crate::lock::DisplayBackend;
@@ -28,8 +29,9 @@ const EVENT_LOOP_TICK: Duration = Duration::from_millis(16);
 /// Wayland `ext-session-lock-v1` display backend.
 ///
 /// This backend asks the compositor to lock the current Wayland session and
-/// keeps a small Wayland event loop alive until `unlock` is called. It only
-/// establishes lock surfaces so the configured frontend can provide lock UI.
+/// keeps a small Wayland event loop alive until `unlock` is called. It renders
+/// opaque blank lock surfaces; user-facing Wayland lock UIs must render on
+/// their own session-lock surfaces instead of normal layer-shell surfaces.
 #[derive(Default)]
 pub struct WaylandSessionLockBackend {
     worker: Mutex<Option<LockWorker>>,
@@ -142,6 +144,9 @@ fn run_lock_worker(
         })?,
         output_state: OutputState::new(&globals, &qh),
         registry_state: RegistryState::new(&globals),
+        shm: Shm::bind(&globals, &qh).map_err(|error| {
+            LimesError::Lock(format!("wayland shm interface unavailable: {error}"))
+        })?,
         session_lock_state: SessionLockState::new(&globals, &qh),
         session_lock: None,
         lock_surfaces: Vec::new(),
@@ -189,6 +194,7 @@ struct AppData {
     compositor_state: CompositorState,
     output_state: OutputState,
     registry_state: RegistryState,
+    shm: Shm,
 
     session_lock_state: SessionLockState,
     session_lock: Option<SessionLock>,
@@ -241,7 +247,7 @@ impl SessionLockHandler for AppData {
     fn configure(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         session_lock_surface: SessionLockSurface,
         configure: SessionLockSurfaceConfigure,
         _serial: u32,
@@ -250,11 +256,69 @@ impl SessionLockHandler for AppData {
             return;
         }
 
-        // The lock surface is intentionally left visually blank. Frontend windows
-        // can provide the user-facing UI while this backend keeps Wayland in a
-        // locked state.
-        session_lock_surface.wl_surface().commit();
+        if let Err(error) = commit_blank_lock_surface(
+            &self.shm,
+            &session_lock_surface,
+            configure.new_size.0,
+            configure.new_size.1,
+            qh,
+        ) {
+            self.result = Err(error.clone());
+            self.report_ready(Err(error));
+            self.exit = true;
+        }
     }
+}
+
+fn commit_blank_lock_surface(
+    shm: &Shm,
+    session_lock_surface: &SessionLockSurface,
+    width: u32,
+    height: u32,
+    qh: &QueueHandle<AppData>,
+) -> Result<()> {
+    let stride = width
+        .checked_mul(4)
+        .ok_or_else(|| LimesError::Lock("wayland lock surface stride overflow".to_owned()))?;
+    let len = stride
+        .checked_mul(height)
+        .ok_or_else(|| LimesError::Lock("wayland lock surface buffer size overflow".to_owned()))?;
+    let width_i32 = i32::try_from(width)
+        .map_err(|_| LimesError::Lock("wayland lock surface width is too large".to_owned()))?;
+    let height_i32 = i32::try_from(height)
+        .map_err(|_| LimesError::Lock("wayland lock surface height is too large".to_owned()))?;
+    let stride_i32 = i32::try_from(stride)
+        .map_err(|_| LimesError::Lock("wayland lock surface stride is too large".to_owned()))?;
+    let len = usize::try_from(len)
+        .map_err(|_| LimesError::Lock("wayland lock surface buffer is too large".to_owned()))?;
+
+    let mut pool = RawPool::new(len, shm).map_err(|error| {
+        LimesError::Lock(format!(
+            "failed to allocate wayland lock surface buffer: {error}"
+        ))
+    })?;
+
+    let black = 0xFF00_0000_u32.to_le_bytes();
+    for chunk in pool.mmap().chunks_exact_mut(4) {
+        chunk.copy_from_slice(&black);
+    }
+
+    let buffer = pool.create_buffer(
+        0,
+        width_i32,
+        height_i32,
+        stride_i32,
+        wl_shm::Format::Argb8888,
+        (),
+        qh,
+    );
+    session_lock_surface
+        .wl_surface()
+        .attach(Some(&buffer), 0, 0);
+    session_lock_surface.wl_surface().commit();
+    buffer.destroy();
+
+    Ok(())
 }
 
 impl CompositorHandler for AppData {
@@ -341,7 +405,15 @@ impl ProvidesRegistryState for AppData {
     registry_handlers![OutputState,];
 }
 
+impl ShmHandler for AppData {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm
+    }
+}
+
 smithay_client_toolkit::delegate_compositor!(AppData);
 smithay_client_toolkit::delegate_output!(AppData);
 smithay_client_toolkit::delegate_session_lock!(AppData);
+smithay_client_toolkit::delegate_shm!(AppData);
 smithay_client_toolkit::delegate_registry!(AppData);
+wayland_client::delegate_noop!(AppData: ignore wl_buffer::WlBuffer);

@@ -7,11 +7,12 @@ A small iced UI that drives the limes lock authentication path:
 3. collects password (username is filled from $USER),
 4. submits an `AuthRequest` to `LockRuntime::unlock`, for lock/unlock authentication.
 5. uses the default PAM auth exposed by `limes-lock` and prints backend events to stderr.
-6. renders as an iced layer-shell surface, so the password field can be used with Enter to unlock.
+6. renders as an iced layer-shell surface for API/authentication experimentation.
 
-The compositor lock uses real Wayland session-lock integration. `WaylandSessionLockBackend`
-keeps the lock surfaces blank while this example owns the user-facing UI and
-lock/unlock flow through `limes-lock`.
+Note: normal layer-shell surfaces are hidden once Wayland `ext-session-lock-v1`
+locks the session. This example is therefore not a complete usable Wayland lock
+UI when launched with `lock`; use `examples/full-screenlock` for a frontend that
+renders directly on compositor lock surfaces.
 
 Run it after configuring `/etc/pam.d/limes`:
 

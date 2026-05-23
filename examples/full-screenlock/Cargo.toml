@@ -1,0 +1,16 @@
+[package]
+name = "limes-full-screenlock"
+description = "Full-screen iced lock-screen example for limes."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish = false
+
+[dependencies]
+bytemuck = { version = "1.24", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+iced = { version = "0.14", features = ["canvas", "image", "tokio"] }
+iced_sessionlock = "0.18"
+limes-lock = { path = "../../crates/limes-lock" }
+tokio = { version = "1", features = ["rt"] }

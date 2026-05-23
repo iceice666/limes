@@ -64,6 +64,14 @@ impl LockRuntime {
         self.lock.unlock(request)
     }
 
+    /// Authenticates an unlock request without releasing the display backend.
+    ///
+    /// Use this when the frontend owns the compositor session-lock surface and
+    /// will issue the compositor unlock after successful authentication.
+    pub fn authenticate_unlock(&self, request: &AuthRequest) -> AuthOutcome {
+        self.lock.authenticate_unlock(request)
+    }
+
     pub fn launch_lock_frontend(&self) -> Result<i32> {
         let spec = self.config.lock_frontend.as_ref().ok_or_else(|| {
             LimesError::Config(

@@ -12,8 +12,10 @@ backend pieces they need:
 - `limes-login`: login authentication orchestration, PAM session open/close,
   user session launch, and session discovery.
 - `limes-proto`: lightweight shared types/events for frontends and backend code.
-- `examples/simple-lock`: minimal iced/layer-shell lock frontend using
+- `examples/simple-lock`: minimal iced/layer-shell API/authentication demo using
   `limes-lock` only for limes APIs.
+- `examples/full-screenlock`: full-screen iced session-lock frontend that
+  renders directly on Wayland `ext-session-lock-v1` lock surfaces.
 
 There is no bundled CLI. Applications and examples link to the crates directly
 instead of shelling out to a `limes` command.
@@ -33,16 +35,17 @@ A login frontend should:
    `runtime.wait_session(&handle)` so `limes-login` handles PAM session
    open/close and user context switching.
 
-A lock frontend should:
+A lock frontend should either:
 
 1. Build a `LockRuntime` with `limes_lock::LockRuntime::from_env()`.
-2. Call `runtime.lock_now()` when it is responsible for entering the lock.
+2. Call `runtime.lock_now()` when `limes-lock` owns the display lock.
 3. Render the locked UI and collect unlock credentials.
 4. Call `runtime.unlock(&request)`, then clear the secret.
 
-On Wayland, `limes-lock` uses `ext-session-lock-v1` through
-`WaylandSessionLockBackend` to ask the compositor to secure the session. The
-backend keeps lock surfaces alive while the frontend owns the user-facing lock UI.
+Or, if the frontend toolkit owns the Wayland `ext-session-lock-v1` lock surfaces
+itself, authenticate with `runtime.authenticate_unlock(&request)`, clear the
+secret, and then ask the toolkit to release the compositor lock after success.
+Normal layer-shell surfaces are not visible while the session is locked.
 
 ## Example
 
@@ -50,7 +53,13 @@ Configure `/etc/pam.d/limes` before testing PAM-backed auth. Then run the lock
 frontend example under a Wayland compositor with `ext-session-lock-v1` support:
 
 ```sh
-cargo run -p limes-simple-lock -- lock
+cargo run -p limes-full-screenlock -- lock
+```
+
+You can preview the full-screen lock UI without locking the session or calling PAM:
+
+```sh
+cargo run -p limes-full-screenlock -- preview
 ```
 
 Session choices are provided by `limes-login` from system `.desktop` files in
