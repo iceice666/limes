@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::ffi::{c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_void};
 use std::ptr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use limes_proto::{AuthFailure, AuthOutcome, AuthRequest, AuthSuccess, LimesEvent, PamMessageKind};
 
@@ -568,7 +568,7 @@ mod pam {
     pub const PAM_TEXT_INFO: libc::c_int = 4;
 
     #[link(name = "pam")]
-    extern "C" {
+    unsafe extern "C" {
         pub fn pam_start(
             service_name: *const libc::c_char,
             user: *const libc::c_char,

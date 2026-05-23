@@ -113,11 +113,13 @@ impl Config {
     #[must_use]
     pub fn session_spec_for(&self, success: &AuthSuccess) -> SessionSpec {
         let command = if self.session_command.is_empty() {
-            vec![success
-                .shell
-                .clone()
-                .filter(|shell| !shell.trim().is_empty())
-                .unwrap_or_else(|| "/bin/sh".to_owned())]
+            vec![
+                success
+                    .shell
+                    .clone()
+                    .filter(|shell| !shell.trim().is_empty())
+                    .unwrap_or_else(|| "/bin/sh".to_owned()),
+            ]
         } else {
             self.session_command.clone()
         };
