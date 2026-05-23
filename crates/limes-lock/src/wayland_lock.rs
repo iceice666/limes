@@ -19,8 +19,8 @@ use wayland_client::{
     protocol::{wl_output, wl_surface},
 };
 
-use crate::error::{LimesError, Result};
 use crate::lock::DisplayBackend;
+use limes_common::{LimesError, Result};
 
 const LOCK_START_TIMEOUT: Duration = Duration::from_secs(5);
 const EVENT_LOOP_TICK: Duration = Duration::from_millis(16);

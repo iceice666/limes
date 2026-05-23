@@ -10,9 +10,10 @@ use iced_layershell::{
     reexport::Anchor,
     settings::{LayerShellSettings, Settings},
 };
-use limes_core::{Runtime, StderrEventSink};
-
-use limes_proto::{AuthFailure as ProtoAuthFailure, AuthOutcome, AuthRequest, LockState};
+use limes_lock::{
+    AuthFailure as ProtoAuthFailure, AuthOutcome, AuthRequest, LockRuntime, LockState,
+    StderrEventSink,
+};
 
 fn main() -> iced_layershell::Result {
     application(
@@ -32,7 +33,7 @@ fn main() -> iced_layershell::Result {
 }
 
 struct SimpleLock {
-    runtime: Option<Arc<Runtime>>,
+    runtime: Option<Arc<LockRuntime>>,
     username: String,
     password: String,
     state: LockState,
@@ -60,7 +61,7 @@ impl TryFrom<Message> for LayerShellCustomActionWithId {
 impl SimpleLock {
     fn new() -> (Self, Task<Message>) {
         let lock_frontend = matches!(std::env::args().nth(1).as_deref(), Some("lock"));
-        let runtime = Runtime::from_env().ok().map(Arc::new);
+        let runtime = LockRuntime::from_env().ok().map(Arc::new);
 
         let (initial_state, status) = if let Some(runtime) = &runtime {
             runtime.events().subscribe(Arc::new(StderrEventSink));
@@ -170,7 +171,7 @@ impl SimpleLock {
     fn view(&self) -> Element<'_, Message> {
         let title = text("limes simple lock").size(36);
         let warning = text(
-            "Uses Wayland ext-session-lock-v1 via limes-core. The compositor lock surface is currently delegated to the frontend.",
+            "Uses Wayland ext-session-lock-v1 via limes-lock. The compositor lock surface is currently delegated to the frontend.",
         )
         .size(16);
         let state = text(format!("State: {}", self.state)).size(20);

@@ -1,47 +1,46 @@
 # limes
 
-Login manager and screenlock library for Rust frontends.
+Login manager and screenlock libraries for Rust frontends.
 
-`limes-core` is the project: it owns authentication, PAM/session boundaries,
-Wayland session locking, session launch, config, and backend events. UI code is
-expected to live in frontend applications that render, collect input, and call
-`limes-core` APIs directly.
+The project is split into focused crates so frontends can depend only on the
+backend pieces they need:
 
-There is no bundled CLI. Applications and examples link to `limes-core` instead
-of shelling out to a `limes` command.
+- `limes-common`: shared PAM authentication, config, events, frontend launching,
+  and error handling.
+- `limes-lock`: screenlock state, unlock authentication orchestration, and the
+  Wayland `ext-session-lock-v1` display backend.
+- `limes-login`: login authentication orchestration, PAM session open/close,
+  user session launch, and session discovery.
+- `limes-proto`: lightweight shared types/events for frontends and backend code.
+- `examples/simple-lock`: minimal iced/layer-shell lock frontend using
+  `limes-lock` only for limes APIs.
 
-## Architecture
-
-- `crates/limes-core`: login manager and screenlock library. Contains the
-  security-sensitive auth, PAM/session, lock, session launch, config, and event
-  orchestration.
-- `crates/limes-proto`: lightweight shared types/events for frontends and
-  backend/library code.
-- `examples/simple-lock`: minimal iced/layer-shell lock frontend that uses
-  `limes-core` for Wayland session locking and PAM unlock authentication.
+There is no bundled CLI. Applications and examples link to the crates directly
+instead of shelling out to a `limes` command.
 
 ## Frontend integration
 
 A login frontend should:
 
-1. Build a `Runtime` from environment/config with `Runtime::from_env()`.
+1. Build a `LoginRuntime` from environment/config with
+   `limes_login::LoginRuntime::from_env()`.
 2. Collect username/password or PAM responses in the frontend UI.
 3. Create an `AuthRequest` with `username`, `password`, and optional `tty`.
 4. Call `runtime.authenticate(&request)`, then clear the secret with
    `request.clear_secret()`.
 5. On success, call `runtime.start_session_for(&success)` or
    `runtime.start_session_for_with_command(&success, command)`, then
-   `runtime.wait_session(&handle)` so `limes-core` handles PAM session
+   `runtime.wait_session(&handle)` so `limes-login` handles PAM session
    open/close and user context switching.
 
 A lock frontend should:
 
-1. Build a `Runtime` with `Runtime::from_env()`.
+1. Build a `LockRuntime` with `limes_lock::LockRuntime::from_env()`.
 2. Call `runtime.lock_now()` when it is responsible for entering the lock.
 3. Render the locked UI and collect unlock credentials.
 4. Call `runtime.unlock(&request)`, then clear the secret.
 
-On Wayland, `limes-core` uses `ext-session-lock-v1` through
+On Wayland, `limes-lock` uses `ext-session-lock-v1` through
 `WaylandSessionLockBackend` to ask the compositor to secure the session. The
 backend keeps lock surfaces alive while the frontend owns the user-facing lock UI.
 
@@ -54,7 +53,7 @@ frontend example under a Wayland compositor with `ext-session-lock-v1` support:
 cargo run -p limes-simple-lock -- lock
 ```
 
-Session choices are provided by `limes-core` from system `.desktop` files in
+Session choices are provided by `limes-login` from system `.desktop` files in
 `wayland-sessions` and `xsessions`. Extra backend session entries can be supplied
 with a semicolon-separated list:
 
@@ -74,7 +73,7 @@ cargo test --workspace
 The direct PAM login/session flow is informed by [Ly](https://github.com/fairyglade/ly):
 `pam_start`, `PAM_TTY`, `pam_authenticate`, `pam_acct_mgmt`, `pam_setcred`,
 `pam_open_session`, PAM environment import, user context switch, and parent-side
-session waiting/cleanup. Before starting a new PAM auth challenge, `limes-core`
+session waiting/cleanup. Before starting a new PAM auth challenge, `limes-common`
 cleans up any prior PAM transaction that has not yet been opened as a login
 session; already-opened sessions remain owned by the returned session handle and
 are closed during normal session cleanup. The lock authentication path follows

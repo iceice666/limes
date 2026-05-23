@@ -1,5 +1,5 @@
 {
-  description = "Login manager and screenlock library for Rust frontends";
+  description = "Login manager and screenlock libraries for Rust frontends";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

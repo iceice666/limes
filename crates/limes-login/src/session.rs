@@ -7,8 +7,7 @@ use std::os::unix::process::CommandExt;
 
 use limes_proto::{LimesEvent, SessionHandle, SessionSpec};
 
-use crate::error::{LimesError, Result};
-use crate::events::EventBus;
+use limes_common::{EventBus, LimesError, Result};
 
 pub trait SessionBackend: Send + Sync {
     fn start(&self, spec: &SessionSpec) -> Result<SessionHandle>;

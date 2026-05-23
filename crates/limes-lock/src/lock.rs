@@ -2,9 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use limes_proto::{AuthOutcome, AuthRequest, LimesEvent, LockState};
 
-use crate::auth::AuthBackend;
-use crate::error::{LimesError, Result};
-use crate::events::EventBus;
+use limes_common::{AuthBackend, EventBus, LimesError, LockAuthBackend, Result};
 
 pub trait DisplayBackend: Send + Sync {
     fn lock(&self) -> Result<()>;
@@ -33,18 +31,46 @@ impl DisplayBackend for NoopDisplayBackend {
     }
 }
 
+struct AuthBackendAdapter {
+    auth: Arc<dyn AuthBackend>,
+}
+
+impl LockAuthBackend for AuthBackendAdapter {
+    fn authenticate(&self, request: &AuthRequest) -> AuthOutcome {
+        AuthBackend::authenticate(&*self.auth, request)
+    }
+
+    fn close_session(&self, auth_session_id: Option<&str>) -> Result<()> {
+        AuthBackend::close_session(&*self.auth, auth_session_id)
+    }
+}
+
 pub struct LockManager {
     state: Mutex<LockState>,
     display: Arc<dyn DisplayBackend>,
-    auth: Arc<dyn AuthBackend>,
+    auth: Arc<dyn LockAuthBackend>,
     events: EventBus,
 }
 
 impl LockManager {
+    /// Creates a lock manager from the full login auth trait.
+    ///
+    /// Prefer `with_lock_auth` for lock-only auth backends that cannot open
+    /// login sessions.
     #[must_use]
     pub fn new(
         display: Arc<dyn DisplayBackend>,
         auth: Arc<dyn AuthBackend>,
+        events: EventBus,
+    ) -> Self {
+        Self::with_lock_auth(display, Arc::new(AuthBackendAdapter { auth }), events)
+    }
+
+    /// Creates a lock manager from the narrow lock auth trait.
+    #[must_use]
+    pub fn with_lock_auth(
+        display: Arc<dyn DisplayBackend>,
+        auth: Arc<dyn LockAuthBackend>,
         events: EventBus,
     ) -> Self {
         Self {

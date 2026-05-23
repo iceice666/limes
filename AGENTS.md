@@ -6,11 +6,13 @@ Guidance for coding agents working in this repository.
 
 `limes` is a Rust workspace for a login manager and screenlock library.
 
-- `crates/limes-core`: the primary library, with security-sensitive backend logic for auth, PAM/session boundaries, locking, config, and events.
+- `crates/limes-common`: shared security-sensitive auth, config, events, frontend launching, and errors.
+- `crates/limes-lock`: screenlock state and display/session-lock backends.
+- `crates/limes-login`: login-manager PAM/session boundaries, session discovery, and session launch.
 - `crates/limes-proto`: lightweight shared types/events for frontends and backend code.
 - `examples/simple-lock`: minimal iced/layer-shell lock frontend example.
 
-Keep authentication, PAM/session handling, lock state, and session launch logic in `limes-core`. Frontends should render UI, collect input, and call backend APIs instead of duplicating auth/session logic. There is no bundled CLI/app launcher crate.
+Keep authentication in `limes-common`, lock state/display locking in `limes-lock`, and PAM session launch/cleanup in `limes-login`. Frontends should render UI, collect input, and call backend APIs instead of duplicating auth/session logic. There is no bundled CLI/app launcher crate.
 
 ## Development commands
 
@@ -45,7 +47,7 @@ Package outputs include:
 - Do not log passwords or other secrets. `AuthRequest` debug output redacts the password; preserve that behavior.
 - Clear credential buffers after use where practical.
 - Keep `limes-proto` lightweight and dependency-minimal.
-- `Runtime` uses `WaylandSessionLockBackend` by default; `NoopDisplayBackend` is only a placeholder/test implementation. Do not imply non-Wayland or no-op backends provide a real secure screen lock.
+- `LockRuntime` uses `WaylandSessionLockBackend` by default; `NoopDisplayBackend` is only a placeholder/test implementation. Do not imply non-Wayland or no-op backends provide a real secure screen lock.
 - Environment-provided command parsing is intentionally simple whitespace splitting; prefer API-provided command vectors for commands needing quoting.
 
 ## Git hygiene

@@ -1691,13 +1691,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "limes-core"
+name = "limes-common"
 version = "0.1.0"
 dependencies = [
  "libc",
  "limes-proto",
+]
+
+[[package]]
+name = "limes-lock"
+version = "0.1.0"
+dependencies = [
+ "limes-common",
+ "limes-proto",
  "smithay-client-toolkit 0.19.2",
  "wayland-client",
+]
+
+[[package]]
+name = "limes-login"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "limes-common",
+ "limes-proto",
 ]
 
 [[package]]
@@ -1710,8 +1727,7 @@ version = "0.1.0"
 dependencies = [
  "iced",
  "iced_layershell",
- "limes-core",
- "limes-proto",
+ "limes-lock",
 ]
 
 [[package]]

@@ -1,57 +1,57 @@
 use std::sync::Arc;
 
+use limes_common::{
+    AuthBackend, Config, EventBus, FrontendMode, FrontendRunner, FrontendSpec, LimesError, PamAuth,
+    Result,
+};
 use limes_proto::{
-    AuthFailure, AuthOutcome, AuthRequest, AuthSuccess, LimesEvent, SessionChoice, SessionHandle,
+    AuthOutcome, AuthRequest, AuthSuccess, LimesEvent, SessionChoice, SessionHandle,
 };
 
-use crate::auth::{AuthBackend, PamAuth};
-use crate::config::{Config, FrontendSpec};
-use crate::error::{LimesError, Result};
-use crate::events::{EventBus, StderrEventSink};
-use crate::frontend::{FrontendMode, FrontendRunner};
-use crate::lock::LockManager;
-use crate::session::{LocalSessionBackend, SessionManager};
+use crate::session::{LocalSessionBackend, SessionBackend, SessionManager};
 use crate::session_catalog;
-use crate::wayland_lock::WaylandSessionLockBackend;
 
-pub struct Runtime {
+pub struct LoginRuntime {
     config: Config,
     auth: Arc<dyn AuthBackend>,
-    lock: LockManager,
     sessions: SessionManager,
     frontends: FrontendRunner,
     events: EventBus,
 }
 
-impl Runtime {
+impl LoginRuntime {
     pub fn from_env() -> Result<Self> {
         Self::from_config(Config::from_env()?)
     }
 
     pub fn from_config(config: Config) -> Result<Self> {
-        let events = EventBus::new();
-        if std::env::var_os("LIMES_LOG_EVENTS").is_some() {
-            events.subscribe(Arc::new(StderrEventSink));
-        }
-
+        let events = EventBus::from_env();
         let auth: Arc<dyn AuthBackend> = Arc::new(PamAuth::with_events(Some(events.clone())));
+        Ok(Self::with_parts(config, auth, events))
+    }
 
-        let lock = LockManager::new(
-            Arc::new(WaylandSessionLockBackend::default()),
-            Arc::clone(&auth),
-            events.clone(),
-        );
-        let sessions = SessionManager::new(Arc::new(LocalSessionBackend), events.clone());
+    #[must_use]
+    pub fn with_parts(config: Config, auth: Arc<dyn AuthBackend>, events: EventBus) -> Self {
+        Self::with_session_backend(config, auth, Arc::new(LocalSessionBackend), events)
+    }
+
+    #[must_use]
+    pub fn with_session_backend(
+        config: Config,
+        auth: Arc<dyn AuthBackend>,
+        backend: Arc<dyn SessionBackend>,
+        events: EventBus,
+    ) -> Self {
+        let sessions = SessionManager::new(backend, events.clone());
         let frontends = FrontendRunner::new(events.clone());
 
-        Ok(Self {
+        Self {
             config,
             auth,
-            lock,
             sessions,
             frontends,
             events,
-        })
+        }
     }
 
     #[must_use]
@@ -93,7 +93,7 @@ impl Runtime {
     }
 
     /// Starts a session with a frontend-selected command while keeping PAM and
-    /// user context switching inside `limes-core`.
+    /// user context switching inside the login crate.
     pub fn start_session_for_with_command(
         &self,
         success: &AuthSuccess,
@@ -137,14 +137,6 @@ impl Runtime {
         }
     }
 
-    pub fn lock_now(&self) -> Result<()> {
-        self.lock.lock_now()
-    }
-
-    pub fn unlock(&self, request: &AuthRequest) -> AuthOutcome {
-        self.lock.unlock(request)
-    }
-
     pub fn launch_login_frontend(&self) -> Result<i32> {
         let spec = self.config.login_frontend.as_ref().ok_or_else(|| {
             LimesError::Config(
@@ -155,24 +147,8 @@ impl Runtime {
         self.launch_frontend(spec, FrontendMode::Login)
     }
 
-    pub fn launch_lock_frontend(&self) -> Result<i32> {
-        let spec = self.config.lock_frontend.as_ref().ok_or_else(|| {
-            LimesError::Config(
-                "no lock frontend configured; set LIMES_LOCK_FRONTEND or Config::lock_frontend"
-                    .to_owned(),
-            )
-        })?;
-        self.launch_frontend(spec, FrontendMode::Lock)
-    }
-
     fn launch_frontend(&self, spec: &FrontendSpec, mode: FrontendMode) -> Result<i32> {
         let status = self.frontends.run(spec, mode)?;
         Ok(status.code().unwrap_or(1))
-    }
-}
-
-impl From<AuthFailure> for LimesError {
-    fn from(value: AuthFailure) -> Self {
-        Self::Auth(value.to_string())
     }
 }

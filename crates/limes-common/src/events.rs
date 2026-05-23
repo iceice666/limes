@@ -26,6 +26,15 @@ impl EventBus {
         Self::default()
     }
 
+    #[must_use]
+    pub fn from_env() -> Self {
+        let events = Self::new();
+        if std::env::var_os("LIMES_LOG_EVENTS").is_some() {
+            events.subscribe(Arc::new(StderrEventSink));
+        }
+        events
+    }
+
     pub fn subscribe(&self, sink: Arc<dyn EventSink>) {
         if let Ok(mut sinks) = self.sinks.lock() {
             sinks.push(sink);

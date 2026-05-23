@@ -10,5 +10,4 @@ publish = false
 [dependencies]
 iced = { version = "0.14", features = ["tokio"] }
 iced_layershell = "0.18"
-limes-core = { path = "../../crates/limes-core" }
-limes-proto = { path = "../../crates/limes-proto" }
+limes-lock = { path = "../../crates/limes-lock" }

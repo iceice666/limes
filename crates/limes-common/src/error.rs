@@ -34,3 +34,9 @@ impl From<std::io::Error> for LimesError {
         Self::Io(value.to_string())
     }
 }
+
+impl From<limes_proto::AuthFailure> for LimesError {
+    fn from(value: limes_proto::AuthFailure) -> Self {
+        Self::Auth(value.to_string())
+    }
+}

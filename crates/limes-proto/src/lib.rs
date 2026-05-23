@@ -1,8 +1,8 @@
 //! Shared data types used by limes frontends and backend code.
 //!
-//! Keep this crate lightweight. A native frontend can depend on `limes-core`
-//! directly, while an out-of-process/webview frontend can use these types as the
-//! stable vocabulary for a future IPC/FFI boundary.
+//! Keep this crate lightweight. A native frontend can depend on `limes-login`
+//! or `limes-lock` directly, while an out-of-process/webview frontend can use
+//! these types as the stable vocabulary for a future IPC/FFI boundary.
 
 use std::fmt;
 
