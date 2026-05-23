@@ -3,13 +3,14 @@ name = "limes-login"
 description = "Login manager/session-launch library for limes frontends."
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
 libc = "0.2"
-limes-common = { path = "../limes-common" }
-limes-proto = { path = "../limes-proto" }
+limes-common = { version = "0.1.0", path = "../limes-common" }
+limes-proto = { version = "0.1.0", path = "../limes-proto" }
 
 [lib]
 path = "src/lib.rs"

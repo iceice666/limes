@@ -14,8 +14,10 @@ backend pieces they need:
 - `limes-proto`: lightweight shared types/events for frontends and backend code.
 - `examples/simple-lock`: minimal iced/layer-shell API/authentication demo using
   `limes-lock` only for limes APIs.
-- `examples/full-screenlock`: full-screen iced session-lock frontend that
-  renders directly on Wayland `ext-session-lock-v1` lock surfaces.
+
+The full-screen iced session-lock frontend that renders directly on Wayland
+`ext-session-lock-v1` lock surfaces now lives in
+[`reimu_lays_on_water`](https://github.com/iceice666/reimu_lays_on_water).
 
 There is no bundled CLI. Applications and examples link to the crates directly
 instead of shelling out to a `limes` command.
@@ -47,20 +49,17 @@ itself, authenticate with `runtime.authenticate_unlock(&request)`, clear the
 secret, and then ask the toolkit to release the compositor lock after success.
 Normal layer-shell surfaces are not visible while the session is locked.
 
-## Example
+## Examples
 
-Configure `/etc/pam.d/limes` before testing PAM-backed auth. Then run the lock
-frontend example under a Wayland compositor with `ext-session-lock-v1` support:
-
-```sh
-cargo run -p limes-full-screenlock -- lock
-```
-
-You can preview the full-screen lock UI without locking the session or calling PAM:
+Configure `/etc/pam.d/limes` before testing PAM-backed auth. Then run the local
+minimal lock API/authentication smoke test:
 
 ```sh
-cargo run -p limes-full-screenlock -- preview
+cargo run -p limes-simple-lock -- lock
 ```
+
+For a full-screen Wayland session-lock frontend, see
+[`reimu_lays_on_water`](https://github.com/iceice666/reimu_lays_on_water).
 
 Session choices are provided by `limes-login` from system `.desktop` files in
 `wayland-sessions` and `xsessions`. Extra backend session entries can be supplied

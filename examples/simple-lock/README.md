@@ -11,8 +11,9 @@ A small iced UI that drives the limes lock authentication path:
 
 Note: normal layer-shell surfaces are hidden once Wayland `ext-session-lock-v1`
 locks the session. This example is therefore not a complete usable Wayland lock
-UI when launched with `lock`; use `examples/full-screenlock` for a frontend that
-renders directly on compositor lock surfaces.
+UI when launched with `lock`; use
+[`reimu_lays_on_water`](https://github.com/iceice666/reimu_lays_on_water) for a
+frontend that renders directly on compositor lock surfaces.
 
 Run it after configuring `/etc/pam.d/limes`:
 

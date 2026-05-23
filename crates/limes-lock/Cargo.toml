@@ -3,12 +3,13 @@ name = "limes-lock"
 description = "Screenlock library for limes frontends."
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-limes-common = { path = "../limes-common" }
-limes-proto = { path = "../limes-proto" }
+limes-common = { version = "0.1.0", path = "../limes-common" }
+limes-proto = { version = "0.1.0", path = "../limes-proto" }
 smithay-client-toolkit = "0.19"
 wayland-client = "0.31"
 

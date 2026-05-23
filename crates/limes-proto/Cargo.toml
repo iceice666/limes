@@ -3,6 +3,7 @@ name = "limes-proto"
 description = "Lightweight shared types and events for limes frontends and core."
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 

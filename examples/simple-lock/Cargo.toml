@@ -3,6 +3,7 @@ name = "limes-simple-lock"
 description = "Simple iced lock-screen example for limes."
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 publish = false

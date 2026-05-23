@@ -3,12 +3,13 @@ name = "limes-common"
 description = "Shared authentication, config, events, and errors for limes crates."
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
 libc = "0.2"
-limes-proto = { path = "../limes-proto" }
+limes-proto = { version = "0.1.0", path = "../limes-proto" }
 
 [lib]
 path = "src/lib.rs"

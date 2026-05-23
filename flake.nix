@@ -42,13 +42,11 @@
         };
 
         simpleLock = mkExample "limes-simple-lock";
-        fullScreenlock = mkExample "limes-full-screenlock";
       in
       {
         packages = {
           default = simpleLock;
           simple-lock = simpleLock;
-          full-screenlock = fullScreenlock;
         };
 
         devShells.default = pkgs.mkShell {
