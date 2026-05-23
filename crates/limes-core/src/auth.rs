@@ -1,0 +1,531 @@
+use std::collections::HashMap;
+use std::ffi::{c_void, CStr, CString};
+use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+
+use limes_proto::{AuthFailure, AuthOutcome, AuthRequest, AuthSuccess};
+
+use crate::error::{LimesError, Result};
+
+pub trait AuthBackend: Send + Sync {
+    fn authenticate(&self, request: &AuthRequest) -> AuthOutcome;
+    fn open_session(&self, user: &AuthSuccess) -> Result<Vec<(String, String)>>;
+    fn close_session(&self, auth_session_id: Option<&str>) -> Result<()>;
+}
+
+#[derive(Debug)]
+pub struct PamAuth {
+    service: String,
+    sessions: Mutex<HashMap<String, PamSession>>,
+    next_session_id: AtomicU64,
+}
+
+impl PamAuth {
+    #[must_use]
+    pub fn new(service: impl Into<String>) -> Self {
+        Self {
+            service: service.into(),
+            sessions: Mutex::new(HashMap::new()),
+            next_session_id: AtomicU64::new(1),
+        }
+    }
+}
+
+impl AuthBackend for PamAuth {
+    fn authenticate(&self, request: &AuthRequest) -> AuthOutcome {
+        let service = CString::new(self.service.as_str()).map_err(internal_failure)?;
+        let username = CString::new(request.username.as_str()).map_err(internal_failure)?;
+        let password = CString::new(request.password.as_str()).map_err(internal_failure)?;
+        let tty = request
+            .tty
+            .as_deref()
+            .filter(|tty| !tty.trim().is_empty())
+            .map(CString::new)
+            .transpose()
+            .map_err(internal_failure)?;
+
+        let mut conversation = PamConversation {
+            username: username.as_ptr(),
+            password: password.as_ptr(),
+        };
+        let conv = pam::PamConv {
+            conv: Some(pam_conversation),
+            appdata_ptr: (&mut conversation as *mut PamConversation).cast(),
+        };
+
+        let mut handle = ptr::null_mut();
+        let mut status =
+            unsafe { pam::pam_start(service.as_ptr(), username.as_ptr(), &conv, &mut handle) };
+        if status != pam::PAM_SUCCESS {
+            return Err(map_auth_status(status, handle));
+        }
+
+        if let Some(tty) = &tty {
+            status = unsafe { pam::pam_set_item(handle, pam::PAM_TTY, tty.as_ptr().cast()) };
+            if status != pam::PAM_SUCCESS {
+                unsafe { pam::pam_end(handle, status) };
+                return Err(map_auth_status(status, ptr::null_mut()));
+            }
+        }
+
+        status = unsafe { pam::pam_authenticate(handle, 0) };
+        if status != pam::PAM_SUCCESS {
+            unsafe { pam::pam_end(handle, status) };
+            return Err(map_auth_status(status, ptr::null_mut()));
+        }
+
+        status = unsafe { pam::pam_acct_mgmt(handle, 0) };
+        if status != pam::PAM_SUCCESS {
+            unsafe { pam::pam_end(handle, status) };
+            return Err(map_auth_status(status, ptr::null_mut()));
+        }
+
+        status = unsafe { pam::pam_setcred(handle, pam::PAM_ESTABLISH_CRED) };
+        if status != pam::PAM_SUCCESS {
+            unsafe { pam::pam_end(handle, status) };
+            return Err(map_auth_status(status, ptr::null_mut()));
+        }
+
+        let new_session = PamSession::new(handle);
+        let user = match lookup_user(&request.username) {
+            Some(user) => user,
+            None => {
+                drop(new_session);
+                return Err(AuthFailure::InvalidCredentials);
+            }
+        };
+        let session_id = format!(
+            "pam-{}",
+            self.next_session_id.fetch_add(1, Ordering::Relaxed)
+        );
+        let success = AuthSuccess {
+            username: user.username,
+            uid: user.uid,
+            gid: user.gid,
+            home: user.home,
+            shell: user.shell,
+            auth_session_id: Some(session_id.clone()),
+        };
+
+        let mut sessions = match self.sessions.lock() {
+            Ok(sessions) => sessions,
+            Err(_) => {
+                drop(new_session);
+                return Err(AuthFailure::Internal(
+                    "PAM session map mutex poisoned".to_owned(),
+                ));
+            }
+        };
+        sessions.insert(session_id, new_session);
+
+        Ok(success)
+    }
+
+    fn open_session(&self, user: &AuthSuccess) -> Result<Vec<(String, String)>> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| LimesError::Auth("PAM session map mutex poisoned".to_owned()))?;
+        let session_id = user.auth_session_id.as_deref().ok_or_else(|| {
+            LimesError::Auth(format!(
+                "no PAM session id is available for {}",
+                user.username
+            ))
+        })?;
+        let session = sessions.get_mut(session_id).ok_or_else(|| {
+            LimesError::Auth(format!(
+                "no authenticated PAM transaction is available for {}",
+                user.username
+            ))
+        })?;
+
+        session.open()?;
+        Ok(session.env())
+    }
+
+    fn close_session(&self, auth_session_id: Option<&str>) -> Result<()> {
+        let Some(auth_session_id) = auth_session_id else {
+            return Ok(());
+        };
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| LimesError::Auth("PAM session map mutex poisoned".to_owned()))?;
+        drop(sessions.remove(auth_session_id));
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct PamSession {
+    handle: *mut pam::PamHandle,
+    opened: bool,
+    last_status: i32,
+}
+
+unsafe impl Send for PamSession {}
+
+impl PamSession {
+    fn new(handle: *mut pam::PamHandle) -> Self {
+        Self {
+            handle,
+            opened: false,
+            last_status: pam::PAM_SUCCESS,
+        }
+    }
+
+    fn open(&mut self) -> Result<()> {
+        if self.opened {
+            return Ok(());
+        }
+
+        let status = unsafe { pam::pam_open_session(self.handle, 0) };
+        self.last_status = status;
+        if status != pam::PAM_SUCCESS {
+            return Err(LimesError::Auth(pam_error(self.handle, status)));
+        }
+        self.opened = true;
+        Ok(())
+    }
+
+    fn env(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let envp = unsafe { pam::pam_getenvlist(self.handle) };
+        if envp.is_null() {
+            return out;
+        }
+
+        let mut cursor = envp;
+        loop {
+            let item = unsafe { *cursor };
+            if item.is_null() {
+                break;
+            }
+            let value = unsafe { CStr::from_ptr(item) }.to_string_lossy();
+            if let Some((key, value)) = value.split_once('=') {
+                out.push((key.to_owned(), value.to_owned()));
+            }
+            unsafe { libc::free(item.cast()) };
+            cursor = unsafe { cursor.add(1) };
+        }
+        unsafe { libc::free(envp.cast()) };
+        out
+    }
+}
+
+impl Drop for PamSession {
+    fn drop(&mut self) {
+        if self.handle.is_null() {
+            return;
+        }
+        if self.opened {
+            self.last_status = unsafe { pam::pam_close_session(self.handle, 0) };
+        }
+        unsafe {
+            pam::pam_setcred(self.handle, pam::PAM_DELETE_CRED);
+            pam::pam_end(self.handle, self.last_status);
+        }
+        self.handle = ptr::null_mut();
+    }
+}
+
+/// Development-only backend. Never enable this in a real display manager.
+#[derive(Debug, Clone)]
+pub struct DevAuth {
+    password: String,
+}
+
+impl DevAuth {
+    #[must_use]
+    pub fn new(password: impl Into<String>) -> Self {
+        Self {
+            password: password.into(),
+        }
+    }
+}
+
+impl AuthBackend for DevAuth {
+    fn authenticate(&self, request: &AuthRequest) -> AuthOutcome {
+        if request.password != self.password {
+            return Err(AuthFailure::InvalidCredentials);
+        }
+
+        let user = lookup_user(&request.username).unwrap_or_else(|| UserRecord {
+            username: request.username.clone(),
+            uid: 1000,
+            gid: 1000,
+            home: Some(format!("/home/{}", request.username)),
+            shell: Some("/bin/sh".to_owned()),
+        });
+
+        Ok(AuthSuccess {
+            username: user.username,
+            uid: user.uid,
+            gid: user.gid,
+            home: user.home,
+            shell: user.shell,
+            auth_session_id: None,
+        })
+    }
+
+    fn open_session(&self, _user: &AuthSuccess) -> Result<Vec<(String, String)>> {
+        Ok(Vec::new())
+    }
+
+    fn close_session(&self, _auth_session_id: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DenyAllAuth;
+
+impl AuthBackend for DenyAllAuth {
+    fn authenticate(&self, _request: &AuthRequest) -> AuthOutcome {
+        Err(AuthFailure::InvalidCredentials)
+    }
+
+    fn open_session(&self, _user: &AuthSuccess) -> Result<Vec<(String, String)>> {
+        Err(LimesError::Auth(
+            "deny-all backend cannot open sessions".to_owned(),
+        ))
+    }
+
+    fn close_session(&self, _auth_session_id: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct UserRecord {
+    username: String,
+    uid: u32,
+    gid: u32,
+    home: Option<String>,
+    shell: Option<String>,
+}
+
+fn lookup_user(username: &str) -> Option<UserRecord> {
+    let username = CString::new(username).ok()?;
+    let mut passwd = unsafe { std::mem::zeroed::<libc::passwd>() };
+    let mut result = ptr::null_mut();
+    let mut buffer_len = match unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) } {
+        n if n > 0 => n as usize,
+        _ => 16 * 1024,
+    };
+
+    loop {
+        let mut buffer = vec![0_u8; buffer_len];
+        let rc = unsafe {
+            libc::getpwnam_r(
+                username.as_ptr(),
+                &mut passwd,
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+
+        if rc == libc::ERANGE {
+            buffer_len = buffer_len.saturating_mul(2);
+            if buffer_len > 1024 * 1024 {
+                return None;
+            }
+            continue;
+        }
+
+        if rc != 0 || result.is_null() {
+            return None;
+        }
+
+        return Some(UserRecord {
+            username: c_string_field(passwd.pw_name)?,
+            uid: passwd.pw_uid as u32,
+            gid: passwd.pw_gid as u32,
+            home: optional_c_string_field(passwd.pw_dir),
+            shell: optional_c_string_field(passwd.pw_shell),
+        });
+    }
+}
+
+fn optional_c_string_field(value: *const libc::c_char) -> Option<String> {
+    if value.is_null() {
+        None
+    } else {
+        Some(
+            unsafe { CStr::from_ptr(value) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+}
+
+fn c_string_field(value: *const libc::c_char) -> Option<String> {
+    optional_c_string_field(value).filter(|value| !value.is_empty())
+}
+
+extern "C" fn pam_conversation(
+    num_msg: libc::c_int,
+    msg: *mut *const pam::PamMessage,
+    resp: *mut *mut pam::PamResponse,
+    appdata_ptr: *mut c_void,
+) -> libc::c_int {
+    if num_msg <= 0 || msg.is_null() || resp.is_null() || appdata_ptr.is_null() {
+        return pam::PAM_CONV_ERR;
+    }
+
+    let replies = unsafe { libc::calloc(num_msg as usize, std::mem::size_of::<pam::PamResponse>()) }
+        as *mut pam::PamResponse;
+    if replies.is_null() {
+        return pam::PAM_BUF_ERR;
+    }
+
+    let state = unsafe { &*(appdata_ptr.cast::<PamConversation>()) };
+    for index in 0..num_msg as isize {
+        let message = unsafe { *msg.offset(index) };
+        if message.is_null() {
+            free_pam_replies(replies, index);
+            return pam::PAM_CONV_ERR;
+        }
+
+        let response = match unsafe { (*message).msg_style } {
+            pam::PAM_PROMPT_ECHO_ON => state.username,
+            pam::PAM_PROMPT_ECHO_OFF => state.password,
+            pam::PAM_ERROR_MSG | pam::PAM_TEXT_INFO => ptr::null(),
+            _ => ptr::null(),
+        };
+
+        if !response.is_null() {
+            let duplicated = unsafe { libc::strdup(response) };
+            if duplicated.is_null() {
+                free_pam_replies(replies, index);
+                return pam::PAM_BUF_ERR;
+            }
+            unsafe { (*replies.offset(index)).resp = duplicated };
+        }
+    }
+
+    unsafe { *resp = replies };
+    pam::PAM_SUCCESS
+}
+
+fn free_pam_replies(replies: *mut pam::PamResponse, initialized: isize) {
+    for index in 0..initialized {
+        let response = unsafe { (*replies.offset(index)).resp };
+        if !response.is_null() {
+            unsafe { libc::free(response.cast()) };
+        }
+    }
+    unsafe { libc::free(replies.cast()) };
+}
+
+struct PamConversation {
+    username: *const libc::c_char,
+    password: *const libc::c_char,
+}
+
+fn internal_failure(error: impl std::fmt::Display) -> AuthFailure {
+    AuthFailure::Internal(error.to_string())
+}
+
+fn map_auth_status(status: i32, handle: *mut pam::PamHandle) -> AuthFailure {
+    match status {
+        pam::PAM_AUTH_ERR | pam::PAM_USER_UNKNOWN => AuthFailure::InvalidCredentials,
+        pam::PAM_MAXTRIES => AuthFailure::LockedOut,
+        pam::PAM_CRED_INSUFFICIENT | pam::PAM_AUTHINFO_UNAVAIL => {
+            AuthFailure::BackendUnavailable(pam_error(handle, status))
+        }
+        pam::PAM_ACCT_EXPIRED | pam::PAM_NEW_AUTHTOK_REQD | pam::PAM_PERM_DENIED => {
+            AuthFailure::Internal(pam_error(handle, status))
+        }
+        _ => AuthFailure::Internal(pam_error(handle, status)),
+    }
+}
+
+fn pam_error(handle: *mut pam::PamHandle, status: i32) -> String {
+    let message = unsafe { pam::pam_strerror(handle, status) };
+    if message.is_null() {
+        format!("PAM error {status}")
+    } else {
+        unsafe { CStr::from_ptr(message) }
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+#[allow(non_camel_case_types)]
+mod pam {
+    use std::ffi::c_void;
+
+    pub enum PamHandle {}
+
+    #[repr(C)]
+    pub struct PamMessage {
+        pub msg_style: libc::c_int,
+        pub msg: *const libc::c_char,
+    }
+
+    #[repr(C)]
+    pub struct PamResponse {
+        pub resp: *mut libc::c_char,
+        pub resp_retcode: libc::c_int,
+    }
+
+    #[repr(C)]
+    pub struct PamConv {
+        pub conv: Option<
+            extern "C" fn(
+                libc::c_int,
+                *mut *const PamMessage,
+                *mut *mut PamResponse,
+                *mut c_void,
+            ) -> libc::c_int,
+        >,
+        pub appdata_ptr: *mut c_void,
+    }
+
+    pub const PAM_SUCCESS: libc::c_int = 0;
+    pub const PAM_PERM_DENIED: libc::c_int = 6;
+    pub const PAM_AUTH_ERR: libc::c_int = 7;
+    pub const PAM_CRED_INSUFFICIENT: libc::c_int = 8;
+    pub const PAM_AUTHINFO_UNAVAIL: libc::c_int = 9;
+    pub const PAM_USER_UNKNOWN: libc::c_int = 10;
+    pub const PAM_MAXTRIES: libc::c_int = 11;
+    pub const PAM_NEW_AUTHTOK_REQD: libc::c_int = 12;
+    pub const PAM_ACCT_EXPIRED: libc::c_int = 13;
+    pub const PAM_CONV_ERR: libc::c_int = 19;
+    pub const PAM_BUF_ERR: libc::c_int = 5;
+
+    pub const PAM_ESTABLISH_CRED: libc::c_int = 0x0002;
+    pub const PAM_DELETE_CRED: libc::c_int = 0x0004;
+    pub const PAM_TTY: libc::c_int = 3;
+
+    pub const PAM_PROMPT_ECHO_OFF: libc::c_int = 1;
+    pub const PAM_PROMPT_ECHO_ON: libc::c_int = 2;
+    pub const PAM_ERROR_MSG: libc::c_int = 3;
+    pub const PAM_TEXT_INFO: libc::c_int = 4;
+
+    #[link(name = "pam")]
+    extern "C" {
+        pub fn pam_start(
+            service_name: *const libc::c_char,
+            user: *const libc::c_char,
+            pam_conversation: *const PamConv,
+            pamh: *mut *mut PamHandle,
+        ) -> libc::c_int;
+        pub fn pam_end(pamh: *mut PamHandle, pam_status: libc::c_int) -> libc::c_int;
+        pub fn pam_authenticate(pamh: *mut PamHandle, flags: libc::c_int) -> libc::c_int;
+        pub fn pam_acct_mgmt(pamh: *mut PamHandle, flags: libc::c_int) -> libc::c_int;
+        pub fn pam_setcred(pamh: *mut PamHandle, flags: libc::c_int) -> libc::c_int;
+        pub fn pam_open_session(pamh: *mut PamHandle, flags: libc::c_int) -> libc::c_int;
+        pub fn pam_close_session(pamh: *mut PamHandle, flags: libc::c_int) -> libc::c_int;
+        pub fn pam_set_item(
+            pamh: *mut PamHandle,
+            item_type: libc::c_int,
+            item: *const c_void,
+        ) -> libc::c_int;
+        pub fn pam_strerror(pamh: *mut PamHandle, errnum: libc::c_int) -> *const libc::c_char;
+        pub fn pam_getenvlist(pamh: *mut PamHandle) -> *mut *mut libc::c_char;
+    }
+}

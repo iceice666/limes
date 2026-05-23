@@ -1,0 +1,15 @@
+[package]
+name = "limes-frontend-native"
+description = "Starter native/text frontend executable for limes."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "limes-frontend-native"
+path = "src/main.rs"
+
+[dependencies]
+limes-core = { path = "../limes-core" }
+limes-proto = { path = "../limes-proto" }

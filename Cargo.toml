@@ -1,0 +1,14 @@
+[workspace]
+members = [
+  "crates/limes-cli",
+  "crates/limes-core",
+  "crates/limes-proto",
+  "crates/limes-frontend-native",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+version = "0.1.0"
