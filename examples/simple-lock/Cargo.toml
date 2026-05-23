@@ -1,0 +1,13 @@
+[package]
+name = "limes-simple-lock"
+description = "Simple iced lock-screen example for limes."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish = false
+
+[dependencies]
+iced = { version = "0.13", features = ["tokio"] }
+limes-core = { path = "../../crates/limes-core" }
+limes-proto = { path = "../../crates/limes-proto" }
