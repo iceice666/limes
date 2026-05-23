@@ -15,12 +15,34 @@ limes lock    # lock the current session
 - `crates/limes-core`: backend library for auth, PAM/session boundaries, lock state,
   session launch, frontend orchestration, config, and events.
 - `crates/limes-proto`: shared types/events used by frontends and backend code.
-- `crates/limes-frontend-native`: starter frontend executable. It is currently a
-  text renderer, but models how a native/webview frontend can link to
-  `limes-core` and avoid owning auth logic itself.
+- `crates/limes-frontend-native`: starter frontend executable and auth-process
+  example. Its login path uses a small text UI, and its lock path uses an iced
+  UI; both link to `limes-core` instead of owning PAM/session logic themselves.
+- `crates/limes-frontend-iced`: iced-rs login screen with a tinted glass design
+  over `crates/limes-frontend-iced/assets/bg.jpg`, idle lock state, password timeout, session selector, loading
+  animation, and failed-auth shake feedback.
 
 The security-sensitive path should stay in `limes-core`. Frontends should render
 UI, collect credentials, and call backend APIs.
+
+## Auth process example
+
+Use `crates/limes-frontend-native/` as the reference for frontend-owned UI with
+backend-owned authentication:
+
+1. Build a `Runtime` from environment/config with `Runtime::from_env()`.
+2. Collect username/password or PAM response in the frontend UI.
+3. Create an `AuthRequest` with `username`, `password`, and optional `tty`.
+4. Call `runtime.authenticate(&request)` for login verification, then clear the
+   secret with `request.clear_secret()`.
+5. On successful login, call `runtime.start_session_for(&success)`, wait with
+   `runtime.wait_session(&handle)`, and let `limes-core` handle PAM session
+   open/close plus user context switching.
+
+For lock/unlock UI, the same crate shows how to subscribe to PAM prompt events
+with `runtime.events().subscribe(...)`, collect a password or empty response for
+fingerprint/PAM flows, and verify via the backend while keeping secret handling
+out of the renderer logic.
 
 ## Development smoke test
 
@@ -34,10 +56,25 @@ export LIMES_SESSION_COMMAND="sh -c true"
 cargo run -p limes-cli -- login --builtin
 ```
 
-External frontend launch example:
+External frontend launch examples:
 
 ```sh
 cargo run -p limes-cli -- login --frontend target/debug/limes-frontend-native -- login
+
+# Full-screen by default. Set LIMES_ICED_WINDOWED=1 for a normal debug window.
+cargo build -p limes-frontend-iced
+LIMES_ICED_WINDOWED=1 cargo run -p limes-cli -- login --frontend target/debug/limes-frontend-iced -- login
+```
+
+The iced frontend exits after a successful verification once the session is
+started. Set `LIMES_ICED_WAIT_SESSION=1` to keep it alive until the session exits.
+
+Session choices are provided by `limes-core` from system `.desktop` files in
+`wayland-sessions`/`xsessions`. Extra backend session entries can be supplied
+with a semicolon-separated list:
+
+```sh
+export LIMES_SESSIONS='Lab Shell=/bin/sh;Sway=sway'
 ```
 
 ## Acknowledgements
