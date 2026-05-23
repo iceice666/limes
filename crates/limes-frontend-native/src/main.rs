@@ -1,15 +1,13 @@
 use std::env;
 use std::io::{self, IsTerminal, Write};
 use std::process::{self, Command};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 
 use iced::alignment::{Horizontal, Vertical};
-use iced::keyboard::{key, Key};
+use iced::futures::SinkExt;
+use iced::keyboard::{Key, key};
 use iced::widget::{button, column, container, row, text, text_input};
-use iced::{
-    executor, Application, Color, Command as IcedCommand, Element, Length, Settings, Size,
-    Subscription, Theme,
-};
+use iced::{Color, Element, Length, Size, Subscription, Task};
 use limes_core::{EventSink, LimesError, Result, Runtime};
 use limes_proto::{AuthRequest, LimesEvent, PamMessageKind};
 
@@ -85,23 +83,39 @@ fn lock() -> Result<()> {
         .or_else(|_| env::var("USER"))
         .or_else(|_| env::var("LOGNAME"))
         .unwrap_or_else(|_| "user".to_owned());
-
-    let mut settings = Settings::with_flags(LockFlags {
+    let flags = LockFlags {
         runtime,
         username,
-        pam_messages,
-    });
-    settings.window.size = Size::new(520.0, 360.0);
-    settings.window.resizable = false;
+        pam_messages: PamReceiver(pam_messages),
+    };
 
-    LockApp::run(settings)
-        .map_err(|error| LimesError::Frontend(format!("failed to run iced lock UI: {error}")))
+    iced::application(
+        move || LockApp::new(flags.clone()),
+        LockApp::update,
+        LockApp::view,
+    )
+    .title("Limes Lock")
+    .subscription(LockApp::subscription)
+    .window_size(Size::new(520.0, 360.0))
+    .resizable(false)
+    .run()
+    .map_err(|error| LimesError::Frontend(format!("failed to run iced lock UI: {error}")))
 }
 
+#[derive(Clone)]
 struct LockFlags {
     runtime: Arc<Runtime>,
     username: String,
-    pam_messages: Arc<Mutex<mpsc::Receiver<String>>>,
+    pam_messages: PamReceiver,
+}
+
+#[derive(Clone)]
+struct PamReceiver(Arc<Mutex<mpsc::Receiver<String>>>);
+
+impl std::hash::Hash for PamReceiver {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        "limes-pam-messages".hash(state);
+    }
 }
 
 struct GuiPamEventSink {
@@ -132,7 +146,7 @@ struct LockApp {
     username: String,
     password: String,
     status: String,
-    pam_messages: Arc<Mutex<mpsc::Receiver<String>>>,
+    pam_messages: PamReceiver,
     verifying: bool,
     unlocked: bool,
 }
@@ -146,67 +160,47 @@ enum LockMessage {
     PamMessage(String),
 }
 
-impl Application for LockApp {
-    type Executor = executor::Default;
-    type Message = LockMessage;
-    type Theme = Theme;
-    type Flags = LockFlags;
-
-    fn new(flags: Self::Flags) -> (Self, IcedCommand<Self::Message>) {
-        (
-            Self {
-                runtime: flags.runtime,
-                username: flags.username,
-                password: String::new(),
-                status: "Enter password, or press Enter with an empty field for PAM/fingerprint"
-                    .to_owned(),
-                pam_messages: flags.pam_messages,
-                verifying: false,
-                unlocked: false,
-            },
-            IcedCommand::none(),
-        )
+impl LockApp {
+    fn new(flags: LockFlags) -> Self {
+        Self {
+            runtime: flags.runtime,
+            username: flags.username,
+            password: String::new(),
+            status: "Enter password, or press Enter with an empty field for PAM/fingerprint"
+                .to_owned(),
+            pam_messages: flags.pam_messages,
+            verifying: false,
+            unlocked: false,
+        }
     }
 
-    fn title(&self) -> String {
-        "Limes Lock".to_owned()
-    }
-
-    fn subscription(&self) -> Subscription<Self::Message> {
+    fn subscription(&self) -> Subscription<LockMessage> {
         Subscription::batch([
-            iced::keyboard::on_key_press(|key, _modifiers| match key.as_ref() {
-                Key::Named(key::Named::Backspace) => Some(LockMessage::BackspacePressed),
+            iced::keyboard::listen().filter_map(|event| match event {
+                iced::keyboard::Event::KeyPressed { key, .. } => match key.as_ref() {
+                    Key::Named(key::Named::Backspace) => Some(LockMessage::BackspacePressed),
+                    _ => None,
+                },
                 _ => None,
             }),
-            iced::subscription::unfold(
-                "limes-pam-messages",
-                Arc::clone(&self.pam_messages),
-                |receiver| async move {
-                    let message = receiver
-                        .lock()
-                        .ok()
-                        .and_then(|receiver| receiver.recv().ok())
-                        .unwrap_or_else(|| "PAM message channel closed".to_owned());
-                    (LockMessage::PamMessage(message), receiver)
-                },
-            ),
+            Subscription::run_with(self.pam_messages.clone(), pam_message_stream),
         ])
     }
 
-    fn update(&mut self, message: Self::Message) -> IcedCommand<Self::Message> {
+    fn update(&mut self, message: LockMessage) -> Task<LockMessage> {
         match message {
             LockMessage::PasswordChanged(password) => {
                 self.password = password;
-                IcedCommand::none()
+                Task::none()
             }
             LockMessage::BackspacePressed => {
                 self.password.clear();
                 self.status = "Input cleared".to_owned();
-                IcedCommand::none()
+                Task::none()
             }
             LockMessage::VerifyRequested => {
                 if self.verifying {
-                    return IcedCommand::none();
+                    return Task::none();
                 }
 
                 self.verifying = true;
@@ -216,7 +210,7 @@ impl Application for LockApp {
                 let password = std::mem::take(&mut self.password);
                 let tty = env::var("TTY").ok();
 
-                IcedCommand::perform(
+                Task::perform(
                     async move { verify_request(runtime, username, password, tty) },
                     LockMessage::AuthFinished,
                 )
@@ -232,18 +226,18 @@ impl Application for LockApp {
                         self.status = format!("Authentication failed: {reason}");
                     }
                 }
-                IcedCommand::none()
+                Task::none()
             }
             LockMessage::PamMessage(message) => {
                 if self.verifying {
                     self.status = message;
                 }
-                IcedCommand::none()
+                Task::none()
             }
         }
     }
 
-    fn view(&self) -> Element<'_, Self::Message> {
+    fn view(&self) -> Element<'_, LockMessage> {
         let title = text("LIMES").size(44);
         let state = if self.unlocked { "UNLOCKED" } else { "LOCKED" };
         let status_color = if self.unlocked {
@@ -269,7 +263,7 @@ impl Application for LockApp {
 
         let content = column![
             title,
-            text(&self.status).size(24).style(status_color),
+            text(&self.status).size(24).color(status_color),
             text(format!("State: {state}    User: {}", self.username)).size(18),
             password,
             row![
@@ -280,17 +274,38 @@ impl Application for LockApp {
             text("Enter = verify    Backspace/Clear = clear input").size(14),
         ]
         .spacing(18)
-        .align_items(iced::Alignment::Center);
+        .align_x(Horizontal::Center);
 
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .center_x()
-            .center_y()
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
             .align_x(Horizontal::Center)
             .align_y(Vertical::Center)
             .into()
     }
+}
+
+fn pam_message_stream(
+    receiver: &PamReceiver,
+) -> iced::futures::stream::BoxStream<'static, LockMessage> {
+    let receiver = receiver.clone();
+
+    Box::pin(iced::stream::channel(10, async move |mut output| {
+        loop {
+            let message = receiver
+                .0
+                .lock()
+                .ok()
+                .and_then(|receiver| receiver.recv().ok())
+                .unwrap_or_else(|| "PAM message channel closed".to_owned());
+
+            if output.send(LockMessage::PamMessage(message)).await.is_err() {
+                break;
+            }
+        }
+    }))
 }
 
 fn verify_request(
