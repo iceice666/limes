@@ -1,9 +1,17 @@
 use std::env;
 use std::io::{self, IsTerminal, Write};
 use std::process::{self, Command};
+use std::sync::{mpsc, Arc, Mutex};
 
-use limes_core::{LimesError, Result, Runtime};
-use limes_proto::AuthRequest;
+use iced::alignment::{Horizontal, Vertical};
+use iced::keyboard::{key, Key};
+use iced::widget::{button, column, container, row, text, text_input};
+use iced::{
+    executor, Application, Color, Command as IcedCommand, Element, Length, Settings, Size,
+    Subscription, Theme,
+};
+use limes_core::{EventSink, LimesError, Result, Runtime};
+use limes_proto::{AuthRequest, LimesEvent, PamMessageKind};
 
 fn main() {
     if let Err(error) = run() {
@@ -67,10 +75,241 @@ fn login() -> Result<()> {
 }
 
 fn lock() -> Result<()> {
-    let runtime = Runtime::from_env()?;
-    runtime.lock_now()?;
-    println!("locked (starter text frontend)");
-    Ok(())
+    let runtime = Arc::new(Runtime::from_env()?);
+    let (pam_tx, pam_rx) = mpsc::channel();
+    runtime
+        .events()
+        .subscribe(Arc::new(GuiPamEventSink { sender: pam_tx }));
+    let pam_messages = Arc::new(Mutex::new(pam_rx));
+    let username = env::var("LIMES_USERNAME")
+        .or_else(|_| env::var("USER"))
+        .or_else(|_| env::var("LOGNAME"))
+        .unwrap_or_else(|_| "user".to_owned());
+
+    let mut settings = Settings::with_flags(LockFlags {
+        runtime,
+        username,
+        pam_messages,
+    });
+    settings.window.size = Size::new(520.0, 360.0);
+    settings.window.resizable = false;
+
+    LockApp::run(settings)
+        .map_err(|error| LimesError::Frontend(format!("failed to run iced lock UI: {error}")))
+}
+
+struct LockFlags {
+    runtime: Arc<Runtime>,
+    username: String,
+    pam_messages: Arc<Mutex<mpsc::Receiver<String>>>,
+}
+
+struct GuiPamEventSink {
+    sender: mpsc::Sender<String>,
+}
+
+impl EventSink for GuiPamEventSink {
+    fn emit(&self, event: &LimesEvent) {
+        if let LimesEvent::AuthPamMessage { kind, message, .. } = event {
+            let label = match kind {
+                PamMessageKind::PromptEchoOn => "PAM prompt",
+                PamMessageKind::PromptEchoOff => "PAM secret prompt",
+                PamMessageKind::TextInfo => "PAM info",
+                PamMessageKind::Error => "PAM error",
+            };
+            let text = if message.is_empty() {
+                label.to_owned()
+            } else {
+                format!("{label}: {message}")
+            };
+            let _ = self.sender.send(text);
+        }
+    }
+}
+
+struct LockApp {
+    runtime: Arc<Runtime>,
+    username: String,
+    password: String,
+    status: String,
+    pam_messages: Arc<Mutex<mpsc::Receiver<String>>>,
+    verifying: bool,
+    unlocked: bool,
+}
+
+#[derive(Debug, Clone)]
+enum LockMessage {
+    PasswordChanged(String),
+    VerifyRequested,
+    AuthFinished(std::result::Result<String, String>),
+    BackspacePressed,
+    PamMessage(String),
+}
+
+impl Application for LockApp {
+    type Executor = executor::Default;
+    type Message = LockMessage;
+    type Theme = Theme;
+    type Flags = LockFlags;
+
+    fn new(flags: Self::Flags) -> (Self, IcedCommand<Self::Message>) {
+        (
+            Self {
+                runtime: flags.runtime,
+                username: flags.username,
+                password: String::new(),
+                status: "Enter password, or press Enter with an empty field for PAM/fingerprint"
+                    .to_owned(),
+                pam_messages: flags.pam_messages,
+                verifying: false,
+                unlocked: false,
+            },
+            IcedCommand::none(),
+        )
+    }
+
+    fn title(&self) -> String {
+        "Limes Lock".to_owned()
+    }
+
+    fn subscription(&self) -> Subscription<Self::Message> {
+        Subscription::batch([
+            iced::keyboard::on_key_press(|key, _modifiers| match key.as_ref() {
+                Key::Named(key::Named::Backspace) => Some(LockMessage::BackspacePressed),
+                _ => None,
+            }),
+            iced::subscription::unfold(
+                "limes-pam-messages",
+                Arc::clone(&self.pam_messages),
+                |receiver| async move {
+                    let message = receiver
+                        .lock()
+                        .ok()
+                        .and_then(|receiver| receiver.recv().ok())
+                        .unwrap_or_else(|| "PAM message channel closed".to_owned());
+                    (LockMessage::PamMessage(message), receiver)
+                },
+            ),
+        ])
+    }
+
+    fn update(&mut self, message: Self::Message) -> IcedCommand<Self::Message> {
+        match message {
+            LockMessage::PasswordChanged(password) => {
+                self.password = password;
+                IcedCommand::none()
+            }
+            LockMessage::BackspacePressed => {
+                self.password.clear();
+                self.status = "Input cleared".to_owned();
+                IcedCommand::none()
+            }
+            LockMessage::VerifyRequested => {
+                if self.verifying {
+                    return IcedCommand::none();
+                }
+
+                self.verifying = true;
+                self.status = "Verifying with PAM... check for fingerprint prompts".to_owned();
+                let runtime = Arc::clone(&self.runtime);
+                let username = self.username.clone();
+                let password = std::mem::take(&mut self.password);
+                let tty = env::var("TTY").ok();
+
+                IcedCommand::perform(
+                    async move { verify_request(runtime, username, password, tty) },
+                    LockMessage::AuthFinished,
+                )
+            }
+            LockMessage::AuthFinished(result) => {
+                self.verifying = false;
+                match result {
+                    Ok(username) => {
+                        self.unlocked = true;
+                        self.status = format!("Unlocked as {username}");
+                    }
+                    Err(reason) => {
+                        self.status = format!("Authentication failed: {reason}");
+                    }
+                }
+                IcedCommand::none()
+            }
+            LockMessage::PamMessage(message) => {
+                if self.verifying {
+                    self.status = message;
+                }
+                IcedCommand::none()
+            }
+        }
+    }
+
+    fn view(&self) -> Element<'_, Self::Message> {
+        let title = text("LIMES").size(44);
+        let state = if self.unlocked { "UNLOCKED" } else { "LOCKED" };
+        let status_color = if self.unlocked {
+            Color::from_rgb(0.25, 0.75, 0.35)
+        } else if self.verifying {
+            Color::from_rgb(0.95, 0.75, 0.25)
+        } else {
+            Color::from_rgb(0.9, 0.25, 0.25)
+        };
+
+        let password = text_input("Password / PAM response", &self.password)
+            .on_input(LockMessage::PasswordChanged)
+            .on_submit(LockMessage::VerifyRequested)
+            .padding(12)
+            .size(20)
+            .secure(true);
+
+        let verify = if self.verifying {
+            button("Verifying...")
+        } else {
+            button("Unlock").on_press(LockMessage::VerifyRequested)
+        };
+
+        let content = column![
+            title,
+            text(&self.status).size(24).style(status_color),
+            text(format!("State: {state}    User: {}", self.username)).size(18),
+            password,
+            row![
+                verify,
+                button("Clear").on_press(LockMessage::BackspacePressed),
+            ]
+            .spacing(12),
+            text("Enter = verify    Backspace/Clear = clear input").size(14),
+        ]
+        .spacing(18)
+        .align_items(iced::Alignment::Center);
+
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x()
+            .center_y()
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center)
+            .into()
+    }
+}
+
+fn verify_request(
+    runtime: Arc<Runtime>,
+    username: String,
+    password: String,
+    tty: Option<String>,
+) -> std::result::Result<String, String> {
+    let mut request = AuthRequest {
+        username,
+        password,
+        tty,
+    };
+
+    let outcome = runtime.authenticate(&request);
+    request.clear_secret();
+    outcome
+        .map(|success| success.username)
+        .map_err(|reason| reason.to_string())
 }
 
 fn prompt_line(prompt: &str) -> io::Result<String> {

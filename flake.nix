@@ -19,6 +19,17 @@
           inherit system;
         };
 
+        guiRuntimeLibs = with pkgs; [
+          libGL
+          libxkbcommon
+          vulkan-loader
+          wayland
+          libx11
+          libxcursor
+          libxi
+          libxrandr
+        ];
+
         rustPackage = packageName: binName: pkgs.rustPlatform.buildRustPackage {
           pname = binName;
           version = "0.1.0";
@@ -26,7 +37,8 @@
           cargoLock.lockFile = ./Cargo.lock;
           cargoBuildFlags = [ "-p" packageName ];
           cargoTestFlags = [ "-p" packageName ];
-          buildInputs = [ pkgs.pam ];
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.pam ] ++ pkgs.lib.optionals (packageName == "limes-frontend-native") guiRuntimeLibs;
         };
       in
       {
@@ -41,13 +53,15 @@
             cargo
             clippy
             pam
+            pkg-config
             rust-analyzer
             rustc
             rustfmt
-          ];
+          ] ++ guiRuntimeLibs;
 
           env = {
             RUST_BACKTRACE = "1";
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath guiRuntimeLibs;
           };
         };
       }

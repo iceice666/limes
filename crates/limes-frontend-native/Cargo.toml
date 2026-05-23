@@ -11,5 +11,6 @@ name = "limes-frontend-native"
 path = "src/main.rs"
 
 [dependencies]
+iced = "0.12.1"
 limes-core = { path = "../limes-core" }
 limes-proto = { path = "../limes-proto" }
