@@ -79,6 +79,15 @@ impl fmt::Display for AuthFailure {
 
 pub type AuthOutcome = Result<AuthSuccess, AuthFailure>;
 
+/// PAM conversation message kinds reported by authentication backends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PamMessageKind {
+    PromptEchoOn,
+    PromptEchoOff,
+    TextInfo,
+    Error,
+}
+
 /// Lock state as understood by UI frontends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockState {
@@ -138,10 +147,31 @@ pub struct SessionHandle {
 /// Events emitted by backend orchestration for logging/diagnostics/UI state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LimesEvent {
-    LockStateChanged { state: LockState },
-    AuthStarted { username: String },
-    AuthSucceeded { username: String, uid: u32 },
-    AuthFailed { username: String, reason: String },
-    SessionStarted { username: String, pid: u32 },
-    FrontendStarted { mode: String, command: Vec<String> },
+    LockStateChanged {
+        state: LockState,
+    },
+    AuthStarted {
+        username: String,
+    },
+    AuthSucceeded {
+        username: String,
+        uid: u32,
+    },
+    AuthFailed {
+        username: String,
+        reason: String,
+    },
+    AuthPamMessage {
+        username: String,
+        kind: PamMessageKind,
+        message: String,
+    },
+    SessionStarted {
+        username: String,
+        pid: u32,
+    },
+    FrontendStarted {
+        mode: String,
+        command: Vec<String>,
+    },
 }

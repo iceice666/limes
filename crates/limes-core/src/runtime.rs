@@ -31,7 +31,10 @@ impl Runtime {
         }
 
         let auth: Arc<dyn AuthBackend> = match &config.auth_backend {
-            AuthBackendKind::Pam => Arc::new(PamAuth::new(config.pam_service.clone())),
+            AuthBackendKind::Pam => Arc::new(PamAuth::with_events(
+                config.pam_service.clone(),
+                Some(events.clone()),
+            )),
             AuthBackendKind::DevPassword { password } => Arc::new(DevAuth::new(password.clone())),
             AuthBackendKind::DenyAll => Arc::new(DenyAllAuth),
         };

@@ -4,9 +4,10 @@ use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use limes_proto::{AuthFailure, AuthOutcome, AuthRequest, AuthSuccess};
+use limes_proto::{AuthFailure, AuthOutcome, AuthRequest, AuthSuccess, LimesEvent, PamMessageKind};
 
 use crate::error::{LimesError, Result};
+use crate::events::EventBus;
 
 pub trait AuthBackend: Send + Sync {
     fn authenticate(&self, request: &AuthRequest) -> AuthOutcome;
@@ -14,20 +15,37 @@ pub trait AuthBackend: Send + Sync {
     fn close_session(&self, auth_session_id: Option<&str>) -> Result<()>;
 }
 
-#[derive(Debug)]
 pub struct PamAuth {
     service: String,
     sessions: Mutex<HashMap<String, PamSession>>,
     next_session_id: AtomicU64,
+    events: Option<EventBus>,
+}
+
+impl std::fmt::Debug for PamAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PamAuth")
+            .field("service", &self.service)
+            .field("sessions", &self.sessions)
+            .field("next_session_id", &self.next_session_id)
+            .field("events", &self.events.as_ref().map(|_| "<event-bus>"))
+            .finish()
+    }
 }
 
 impl PamAuth {
     #[must_use]
     pub fn new(service: impl Into<String>) -> Self {
+        Self::with_events(service, None)
+    }
+
+    #[must_use]
+    pub fn with_events(service: impl Into<String>, events: Option<EventBus>) -> Self {
         Self {
             service: service.into(),
             sessions: Mutex::new(HashMap::new()),
             next_session_id: AtomicU64::new(1),
+            events,
         }
     }
 }
@@ -47,7 +65,9 @@ impl AuthBackend for PamAuth {
 
         let mut conversation = PamConversation {
             username: username.as_ptr(),
+            username_string: request.username.clone(),
             password: password.as_ptr(),
+            events: self.events.clone(),
         };
         let conv = pam::PamConv {
             conv: Some(pam_conversation),
@@ -389,7 +409,13 @@ extern "C" fn pam_conversation(
             return pam::PAM_CONV_ERR;
         }
 
-        let response = match unsafe { (*message).msg_style } {
+        let style = unsafe { (*message).msg_style };
+        let message_text = pam_message_text(message);
+        if let Some(kind) = pam_message_kind(style) {
+            state.emit_message(kind, &message_text);
+        }
+
+        let response = match style {
             pam::PAM_PROMPT_ECHO_ON => state.username,
             pam::PAM_PROMPT_ECHO_OFF => state.password,
             pam::PAM_ERROR_MSG | pam::PAM_TEXT_INFO => ptr::null(),
@@ -422,7 +448,42 @@ fn free_pam_replies(replies: *mut pam::PamResponse, initialized: isize) {
 
 struct PamConversation {
     username: *const libc::c_char,
+    username_string: String,
     password: *const libc::c_char,
+    events: Option<EventBus>,
+}
+
+impl PamConversation {
+    fn emit_message(&self, kind: PamMessageKind, message: &str) {
+        if let Some(events) = &self.events {
+            events.emit(LimesEvent::AuthPamMessage {
+                username: self.username_string.clone(),
+                kind,
+                message: message.to_owned(),
+            });
+        }
+    }
+}
+
+fn pam_message_kind(style: libc::c_int) -> Option<PamMessageKind> {
+    match style {
+        pam::PAM_PROMPT_ECHO_ON => Some(PamMessageKind::PromptEchoOn),
+        pam::PAM_PROMPT_ECHO_OFF => Some(PamMessageKind::PromptEchoOff),
+        pam::PAM_TEXT_INFO => Some(PamMessageKind::TextInfo),
+        pam::PAM_ERROR_MSG => Some(PamMessageKind::Error),
+        _ => None,
+    }
+}
+
+fn pam_message_text(message: *const pam::PamMessage) -> String {
+    let text = unsafe { (*message).msg };
+    if text.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned()
+    }
 }
 
 fn internal_failure(error: impl std::fmt::Display) -> AuthFailure {
