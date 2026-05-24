@@ -10,7 +10,7 @@ pub mod session_catalog;
 
 pub use limes_common::{
     AuthBackend, Config, EventBus, EventSink, FrontendMode, FrontendRunner, FrontendSpec,
-    LimesError, PAM_SERVICE, PamAuth, Result, StderrEventSink,
+    LimesError, NoopLockBackend, PAM_SERVICE, PamAuth, Result, StderrEventSink,
 };
 pub use runtime::LoginRuntime;
 pub use session::{LocalSessionBackend, SessionBackend, SessionManager};

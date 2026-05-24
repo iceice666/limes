@@ -13,7 +13,7 @@ pub use limes_proto as proto;
 
 pub use common::{
     Config, EventBus, EventSink, FrontendMode, FrontendRunner, FrontendSpec, LimesError,
-    LockAuthBackend, PAM_SERVICE, PamAuth, Result, StderrEventSink,
+    LockAuthBackend, NoopLockBackend, PAM_SERVICE, PamAuth, Result, StderrEventSink,
 };
 pub use lock::{DisplayBackend, LockManager, NoopDisplayBackend};
 pub use proto::{AuthFailure, AuthOutcome, AuthRequest, AuthSuccess, LimesEvent, LockState};
