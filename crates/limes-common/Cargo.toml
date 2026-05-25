@@ -10,6 +10,7 @@ version.workspace = true
 [dependencies]
 libc = "0.2"
 limes-proto = { version = "0.1.1", path = "../limes-proto" }
+zeroize = "1.8"
 
 [lib]
 path = "src/lib.rs"

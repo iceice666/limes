@@ -35,6 +35,14 @@ impl SessionBackend for LocalSessionBackend {
 
         #[cfg(unix)]
         {
+            let euid = unsafe { libc::geteuid() };
+            if euid != 0 && euid != spec.uid {
+                return Err(LimesError::Session(format!(
+                    "cannot start session for {} without root privileges: effective uid {euid} cannot switch to uid {}",
+                    spec.username, spec.uid
+                )));
+            }
+
             let username = CString::new(spec.username.clone()).map_err(|error| {
                 LimesError::Session(format!("invalid session username for initgroups: {error}"))
             })?;
@@ -98,19 +106,11 @@ impl SessionBackend for LocalSessionBackend {
     fn terminate(&self, handle: &SessionHandle) -> Result<()> {
         #[cfg(unix)]
         {
-            let status = Command::new("kill")
-                .arg(handle.pid.to_string())
-                .status()
-                .map_err(|error| {
-                    LimesError::Session(format!(
-                        "failed to invoke kill for {}: {error}",
-                        handle.pid
-                    ))
-                })?;
-            if !status.success() {
+            if unsafe { libc::kill(handle.pid as libc::pid_t, libc::SIGTERM) } != 0 {
                 return Err(LimesError::Session(format!(
-                    "kill failed for session pid {} with status {status}",
-                    handle.pid
+                    "failed to terminate session pid {}: {}",
+                    handle.pid,
+                    std::io::Error::last_os_error()
                 )));
             }
         }
@@ -153,5 +153,30 @@ impl SessionManager {
 
     pub fn terminate(&self, handle: &SessionHandle) -> Result<()> {
         self.backend.terminate(handle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn local_session_backend_rejects_user_switch_without_root() {
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+
+        let current_uid = unsafe { libc::geteuid() } as u32;
+        let spec = SessionSpec::new(
+            "target-user",
+            current_uid.saturating_add(1),
+            current_uid.saturating_add(1),
+            vec!["/bin/true".to_owned()],
+        );
+
+        let error = LocalSessionBackend.start(&spec).unwrap_err();
+
+        assert!(error.to_string().contains("without root privileges"));
     }
 }

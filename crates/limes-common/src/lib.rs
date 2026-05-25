@@ -10,7 +10,7 @@ pub mod error;
 pub mod events;
 pub mod frontend;
 
-pub use auth::{AuthBackend, LockAuthBackend, NoopLockBackend, PAM_SERVICE, PamAuth};
+pub use auth::{AuthBackend, LockAuthBackend, NoopLockBackend, PAM_SERVICE, PamAuth, PamLockAuth};
 pub use config::{Config, FrontendSpec};
 pub use error::{LimesError, Result};
 pub use events::{EventBus, EventSink, StderrEventSink};

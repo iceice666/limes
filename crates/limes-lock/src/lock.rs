@@ -170,3 +170,84 @@ impl LockManager {
         let _ = self.set_state(state);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use limes_proto::AuthSuccess;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct RecordingDisplay {
+        locked: AtomicBool,
+        unlocks: AtomicUsize,
+    }
+
+    impl DisplayBackend for RecordingDisplay {
+        fn lock(&self) -> Result<()> {
+            self.locked.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn unlock(&self) -> Result<()> {
+            self.unlocks.fetch_add(1, Ordering::SeqCst);
+            self.locked.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingAuth {
+        closes: AtomicUsize,
+    }
+
+    impl LockAuthBackend for RecordingAuth {
+        fn authenticate(&self, request: &AuthRequest) -> AuthOutcome {
+            Ok(AuthSuccess {
+                username: request.username.clone(),
+                uid: 1000,
+                gid: 1000,
+                home: None,
+                shell: None,
+                auth_session_id: None,
+            })
+        }
+
+        fn close_session(&self, _auth_session_id: Option<&str>) -> Result<()> {
+            self.closes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn authenticate_unlock_does_not_release_display_when_frontend_owns_lock_surface() {
+        let display = Arc::new(RecordingDisplay::default());
+        let auth = Arc::new(RecordingAuth::default());
+        let lock = LockManager::with_lock_auth(display.clone(), auth.clone(), EventBus::default());
+        let request = AuthRequest::new("alice", "secret");
+
+        lock.lock_now().unwrap();
+        let outcome = lock.authenticate_unlock(&request);
+
+        assert!(outcome.is_ok());
+        assert_eq!(display.unlocks.load(Ordering::SeqCst), 0);
+        assert_eq!(auth.closes.load(Ordering::SeqCst), 1);
+        assert_eq!(lock.state().unwrap(), LockState::Unlocked);
+    }
+
+    #[test]
+    fn unlock_releases_display_after_successful_authentication() {
+        let display = Arc::new(RecordingDisplay::default());
+        let auth = Arc::new(RecordingAuth::default());
+        let lock = LockManager::with_lock_auth(display.clone(), auth.clone(), EventBus::default());
+        let request = AuthRequest::new("alice", "secret");
+
+        lock.lock_now().unwrap();
+        let outcome = lock.unlock(&request);
+
+        assert!(outcome.is_ok());
+        assert_eq!(display.unlocks.load(Ordering::SeqCst), 1);
+        assert_eq!(auth.closes.load(Ordering::SeqCst), 1);
+        assert_eq!(lock.state().unwrap(), LockState::Unlocked);
+    }
+}

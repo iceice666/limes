@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use limes_common::{
     Config, EventBus, FrontendMode, FrontendRunner, FrontendSpec, LimesError, LockAuthBackend,
-    PamAuth, Result,
+    PamLockAuth, Result,
 };
 use limes_proto::{AuthOutcome, AuthRequest};
 
@@ -23,7 +23,8 @@ impl LockRuntime {
 
     pub fn from_config(config: Config) -> Result<Self> {
         let events = EventBus::from_env();
-        let auth: Arc<dyn LockAuthBackend> = Arc::new(PamAuth::with_events(Some(events.clone())));
+        let auth: Arc<dyn LockAuthBackend> =
+            Arc::new(PamLockAuth::with_events(Some(events.clone())));
         let display: Arc<dyn DisplayBackend> = Arc::new(WaylandSessionLockBackend::default());
         Ok(Self::with_parts(config, auth, display, events))
     }

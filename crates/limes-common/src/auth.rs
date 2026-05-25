@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use limes_proto::{AuthFailure, AuthOutcome, AuthRequest, AuthSuccess, LimesEvent, PamMessageKind};
+use zeroize::Zeroize;
 
 use crate::error::{LimesError, Result};
 use crate::events::EventBus;
@@ -75,12 +76,26 @@ pub struct PamAuth {
     events: Option<EventBus>,
 }
 
+pub struct PamLockAuth {
+    service: &'static str,
+    events: Option<EventBus>,
+}
+
 impl std::fmt::Debug for PamAuth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PamAuth")
             .field("service", &self.service)
             .field("sessions", &self.sessions)
             .field("next_session_id", &self.next_session_id)
+            .field("events", &self.events.as_ref().map(|_| "<event-bus>"))
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for PamLockAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PamLockAuth")
+            .field("service", &self.service)
             .field("events", &self.events.as_ref().map(|_| "<event-bus>"))
             .finish()
     }
@@ -129,74 +144,29 @@ impl PamAuth {
     }
 }
 
+impl PamLockAuth {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_events(None)
+    }
+
+    #[must_use]
+    pub fn with_events(events: Option<EventBus>) -> Self {
+        Self {
+            service: PAM_SERVICE,
+            events,
+        }
+    }
+}
+
 impl AuthBackend for PamAuth {
     fn authenticate(&self, request: &AuthRequest) -> AuthOutcome {
         self.cleanup_pending_auth_state()
             .map_err(internal_failure)?;
 
-        let service = CString::new(self.service).map_err(internal_failure)?;
-        let username = CString::new(request.username.as_str()).map_err(internal_failure)?;
-        let password = CString::new(request.password.as_str()).map_err(internal_failure)?;
-        let tty = request
-            .tty
-            .as_deref()
-            .filter(|tty| !tty.trim().is_empty())
-            .map(CString::new)
-            .transpose()
-            .map_err(internal_failure)?;
+        let (mut new_session, user) = authenticate_pam(self.service, request, self.events.clone())?;
+        new_session.establish_credentials()?;
 
-        let mut conversation = PamConversation {
-            username: username.as_ptr(),
-            username_string: request.username.clone(),
-            password: password.as_ptr(),
-            events: self.events.clone(),
-        };
-        let conv = pam::PamConv {
-            conv: Some(pam_conversation),
-            appdata_ptr: (&mut conversation as *mut PamConversation).cast(),
-        };
-
-        let mut handle = ptr::null_mut();
-        let mut status =
-            unsafe { pam::pam_start(service.as_ptr(), username.as_ptr(), &conv, &mut handle) };
-        if status != pam::PAM_SUCCESS {
-            return Err(map_auth_status(status, handle));
-        }
-
-        if let Some(tty) = &tty {
-            status = unsafe { pam::pam_set_item(handle, pam::PAM_TTY, tty.as_ptr().cast()) };
-            if status != pam::PAM_SUCCESS {
-                unsafe { pam::pam_end(handle, status) };
-                return Err(map_auth_status(status, ptr::null_mut()));
-            }
-        }
-
-        status = unsafe { pam::pam_authenticate(handle, 0) };
-        if status != pam::PAM_SUCCESS {
-            unsafe { pam::pam_end(handle, status) };
-            return Err(map_auth_status(status, ptr::null_mut()));
-        }
-
-        status = unsafe { pam::pam_acct_mgmt(handle, 0) };
-        if status != pam::PAM_SUCCESS {
-            unsafe { pam::pam_end(handle, status) };
-            return Err(map_auth_status(status, ptr::null_mut()));
-        }
-
-        status = unsafe { pam::pam_setcred(handle, pam::PAM_ESTABLISH_CRED) };
-        if status != pam::PAM_SUCCESS {
-            unsafe { pam::pam_end(handle, status) };
-            return Err(map_auth_status(status, ptr::null_mut()));
-        }
-
-        let new_session = PamSession::new(handle);
-        let user = match lookup_user(&request.username) {
-            Some(user) => user,
-            None => {
-                drop(new_session);
-                return Err(AuthFailure::InvalidCredentials);
-            }
-        };
         let session_id = format!(
             "pam-{}",
             self.next_session_id.fetch_add(1, Ordering::Relaxed)
@@ -259,26 +229,163 @@ impl AuthBackend for PamAuth {
     }
 }
 
-#[derive(Debug)]
+impl LockAuthBackend for PamLockAuth {
+    fn authenticate(&self, request: &AuthRequest) -> AuthOutcome {
+        let (_session, user) = authenticate_pam(self.service, request, self.events.clone())?;
+
+        Ok(AuthSuccess {
+            username: user.username,
+            uid: user.uid,
+            gid: user.gid,
+            home: user.home,
+            shell: user.shell,
+            auth_session_id: None,
+        })
+    }
+
+    fn close_session(&self, _auth_session_id: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn authenticate_pam(
+    service: &'static str,
+    request: &AuthRequest,
+    events: Option<EventBus>,
+) -> std::result::Result<(PamSession, UserRecord), AuthFailure> {
+    let service = CString::new(service).map_err(internal_failure)?;
+    let username = CString::new(request.username.as_str()).map_err(internal_failure)?;
+    let password = SecretCString::new(request.password.as_str()).map_err(internal_failure)?;
+    let tty = request
+        .tty
+        .as_deref()
+        .filter(|tty| !tty.trim().is_empty())
+        .map(CString::new)
+        .transpose()
+        .map_err(internal_failure)?;
+
+    let mut conversation = Box::new(PamConversation {
+        username,
+        username_string: request.username.clone(),
+        password: Some(password),
+        events,
+    });
+    let conv = pam::PamConv {
+        conv: Some(pam_conversation),
+        appdata_ptr: (&mut *conversation as *mut PamConversation).cast(),
+    };
+
+    let mut handle = ptr::null_mut();
+    let mut status = unsafe {
+        pam::pam_start(
+            service.as_ptr(),
+            conversation.username_ptr(),
+            &conv,
+            &mut handle,
+        )
+    };
+    if status != pam::PAM_SUCCESS {
+        return Err(map_auth_status(status, handle));
+    }
+
+    if let Some(tty) = &tty {
+        status = unsafe { pam::pam_set_item(handle, pam::PAM_TTY, tty.as_ptr().cast()) };
+        if status != pam::PAM_SUCCESS {
+            let failure = map_auth_status(status, handle);
+            unsafe { pam::pam_end(handle, status) };
+            return Err(failure);
+        }
+    }
+
+    status = unsafe { pam::pam_authenticate(handle, 0) };
+    if status != pam::PAM_SUCCESS {
+        let failure = map_auth_status(status, handle);
+        unsafe { pam::pam_end(handle, status) };
+        return Err(failure);
+    }
+
+    status = unsafe { pam::pam_acct_mgmt(handle, 0) };
+    if status != pam::PAM_SUCCESS {
+        let failure = map_auth_status(status, handle);
+        unsafe { pam::pam_end(handle, status) };
+        return Err(failure);
+    }
+
+    let Some(user) = lookup_user(&request.username) else {
+        unsafe { pam::pam_end(handle, pam::PAM_USER_UNKNOWN) };
+        return Err(AuthFailure::InvalidCredentials);
+    };
+
+    Ok((PamSession::new(handle, conversation), user))
+}
+
+struct SecretCString {
+    bytes: Vec<u8>,
+}
+
+impl SecretCString {
+    fn new(value: &str) -> std::result::Result<Self, std::ffi::NulError> {
+        CString::new(value).map(|value| Self {
+            bytes: value.into_bytes_with_nul(),
+        })
+    }
+
+    fn as_ptr(&self) -> *const libc::c_char {
+        self.bytes.as_ptr().cast()
+    }
+}
+
+impl Drop for SecretCString {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
+    }
+}
+
 struct PamSession {
     handle: *mut pam::PamHandle,
+    conversation: Box<PamConversation>,
     opened: bool,
+    credentials_established: bool,
     last_status: i32,
 }
 
 unsafe impl Send for PamSession {}
 
+impl std::fmt::Debug for PamSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PamSession")
+            .field("handle", &self.handle)
+            .field("opened", &self.opened)
+            .field("credentials_established", &self.credentials_established)
+            .field("last_status", &self.last_status)
+            .finish_non_exhaustive()
+    }
+}
+
 impl PamSession {
-    fn new(handle: *mut pam::PamHandle) -> Self {
+    fn new(handle: *mut pam::PamHandle, conversation: Box<PamConversation>) -> Self {
         Self {
             handle,
+            conversation,
             opened: false,
+            credentials_established: false,
             last_status: pam::PAM_SUCCESS,
         }
     }
 
     fn is_open(&self) -> bool {
         self.opened
+    }
+
+    fn establish_credentials(&mut self) -> std::result::Result<(), AuthFailure> {
+        let status = unsafe { pam::pam_setcred(self.handle, pam::PAM_ESTABLISH_CRED) };
+        self.last_status = status;
+        if status != pam::PAM_SUCCESS {
+            return Err(map_auth_status(status, self.handle));
+        }
+        self.credentials_established = true;
+        self.conversation.clear_password();
+        Ok(())
     }
 
     fn open(&mut self) -> Result<()> {
@@ -329,7 +436,9 @@ impl Drop for PamSession {
             self.last_status = unsafe { pam::pam_close_session(self.handle, 0) };
         }
         unsafe {
-            pam::pam_setcred(self.handle, pam::PAM_DELETE_CRED);
+            if self.credentials_established {
+                pam::pam_setcred(self.handle, pam::PAM_DELETE_CRED);
+            }
             pam::pam_end(self.handle, self.last_status);
         }
         self.handle = ptr::null_mut();
@@ -435,13 +544,19 @@ extern "C" fn pam_conversation(
         }
 
         let response = match style {
-            pam::PAM_PROMPT_ECHO_ON => state.username,
-            pam::PAM_PROMPT_ECHO_OFF => state.password,
-            pam::PAM_ERROR_MSG | pam::PAM_TEXT_INFO => ptr::null(),
-            _ => ptr::null(),
+            pam::PAM_PROMPT_ECHO_ON => Some(state.username_ptr()),
+            pam::PAM_PROMPT_ECHO_OFF => {
+                let Some(password) = state.password_ptr() else {
+                    free_pam_replies(replies, index);
+                    return pam::PAM_CONV_ERR;
+                };
+                Some(password)
+            }
+            pam::PAM_ERROR_MSG | pam::PAM_TEXT_INFO => None,
+            _ => None,
         };
 
-        if !response.is_null() {
+        if let Some(response) = response {
             let duplicated = unsafe { libc::strdup(response) };
             if duplicated.is_null() {
                 free_pam_replies(replies, index);
@@ -466,13 +581,25 @@ fn free_pam_replies(replies: *mut pam::PamResponse, initialized: isize) {
 }
 
 struct PamConversation {
-    username: *const libc::c_char,
+    username: CString,
     username_string: String,
-    password: *const libc::c_char,
+    password: Option<SecretCString>,
     events: Option<EventBus>,
 }
 
 impl PamConversation {
+    fn username_ptr(&self) -> *const libc::c_char {
+        self.username.as_ptr()
+    }
+
+    fn password_ptr(&self) -> Option<*const libc::c_char> {
+        self.password.as_ref().map(SecretCString::as_ptr)
+    }
+
+    fn clear_password(&mut self) {
+        self.password = None;
+    }
+
     fn emit_message(&self, kind: PamMessageKind, message: &str) {
         if let Some(events) = &self.events {
             events.emit(LimesEvent::AuthPamMessage {
@@ -537,6 +664,20 @@ fn pam_error(handle: *mut pam::PamHandle, status: i32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    use crate::events::EventSink;
+
+    #[derive(Default)]
+    struct CapturingSink {
+        events: Mutex<Vec<LimesEvent>>,
+    }
+
+    impl EventSink for CapturingSink {
+        fn emit(&self, event: &LimesEvent) {
+            self.events.lock().unwrap().push(event.clone());
+        }
+    }
 
     #[test]
     fn noop_lock_backend_rejects_authentication() {
@@ -580,6 +721,109 @@ mod tests {
         let error = backend.open_session(&success).unwrap_err();
 
         assert!(matches!(error, LimesError::Auth(_)));
+    }
+
+    #[test]
+    fn pam_conversation_answers_password_prompt_while_secret_is_present() {
+        let mut conversation = test_conversation("alice", Some("secret"), None);
+        let message_text = CString::new("Password:").unwrap();
+        let message = pam::PamMessage {
+            msg_style: pam::PAM_PROMPT_ECHO_OFF,
+            msg: message_text.as_ptr(),
+        };
+
+        let (status, responses) = call_conversation(&mut conversation, &[&message]);
+
+        assert_eq!(status, pam::PAM_SUCCESS);
+        let responses = responses.expect("PAM conversation should allocate responses");
+        let response = unsafe { CStr::from_ptr((*responses).resp) };
+        assert_eq!(response.to_str().unwrap(), "secret");
+        free_pam_replies(responses, 1);
+    }
+
+    #[test]
+    fn pam_conversation_rejects_password_prompt_after_secret_is_cleared() {
+        let mut conversation = test_conversation("alice", Some("secret"), None);
+        conversation.clear_password();
+        let message_text = CString::new("Password:").unwrap();
+        let message = pam::PamMessage {
+            msg_style: pam::PAM_PROMPT_ECHO_OFF,
+            msg: message_text.as_ptr(),
+        };
+
+        let (status, responses) = call_conversation(&mut conversation, &[&message]);
+
+        assert_eq!(status, pam::PAM_CONV_ERR);
+        assert!(responses.is_none());
+    }
+
+    #[test]
+    fn pam_conversation_emits_info_messages_without_password() {
+        let events = EventBus::new();
+        let sink = Arc::new(CapturingSink::default());
+        events.subscribe(sink.clone());
+        let mut conversation = test_conversation("alice", None, Some(events));
+        let message_text = CString::new("hello").unwrap();
+        let message = pam::PamMessage {
+            msg_style: pam::PAM_TEXT_INFO,
+            msg: message_text.as_ptr(),
+        };
+
+        let (status, responses) = call_conversation(&mut conversation, &[&message]);
+
+        assert_eq!(status, pam::PAM_SUCCESS);
+        let responses = responses.expect("PAM conversation should allocate responses");
+        assert!(unsafe { (*responses).resp }.is_null());
+        free_pam_replies(responses, 1);
+
+        let captured = sink.events.lock().unwrap();
+        assert_eq!(
+            *captured,
+            vec![LimesEvent::AuthPamMessage {
+                username: "alice".to_owned(),
+                kind: PamMessageKind::TextInfo,
+                message: "hello".to_owned(),
+            }]
+        );
+    }
+
+    fn test_conversation(
+        username: &str,
+        password: Option<&str>,
+        events: Option<EventBus>,
+    ) -> PamConversation {
+        PamConversation {
+            username: CString::new(username).unwrap(),
+            username_string: username.to_owned(),
+            password: password.map(|password| SecretCString::new(password).unwrap()),
+            events,
+        }
+    }
+
+    fn call_conversation(
+        conversation: &mut PamConversation,
+        messages: &[&pam::PamMessage],
+    ) -> (libc::c_int, Option<*mut pam::PamResponse>) {
+        let mut raw_messages = messages
+            .iter()
+            .map(|message| *message as *const pam::PamMessage)
+            .collect::<Vec<_>>();
+        let mut responses = ptr::null_mut();
+        let status = pam_conversation(
+            raw_messages.len() as libc::c_int,
+            raw_messages.as_mut_ptr(),
+            &mut responses,
+            (conversation as *mut PamConversation).cast(),
+        );
+
+        (
+            status,
+            if responses.is_null() {
+                None
+            } else {
+                Some(responses)
+            },
+        )
     }
 }
 

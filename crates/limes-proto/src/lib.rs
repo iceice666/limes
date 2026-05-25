@@ -6,6 +6,8 @@
 
 use std::fmt;
 
+use zeroize::Zeroize;
+
 /// Credentials collected by a frontend and submitted to the backend.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AuthRequest {
@@ -24,12 +26,15 @@ impl AuthRequest {
         }
     }
 
-    /// Best-effort clearing of the owned password buffer.
-    ///
-    /// This is a starter implementation. A production build should use a
-    /// zeroizing secret type.
     pub fn clear_secret(&mut self) {
+        self.password.zeroize();
         self.password.clear();
+    }
+}
+
+impl Drop for AuthRequest {
+    fn drop(&mut self) {
+        self.clear_secret();
     }
 }
 
@@ -40,6 +45,31 @@ impl fmt::Debug for AuthRequest {
             .field("password", &"<redacted>")
             .field("tty", &self.tty)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_request_debug_redacts_password() {
+        let request = AuthRequest::new("alice", "secret");
+
+        let rendered = format!("{request:?}");
+
+        assert!(rendered.contains("alice"));
+        assert!(rendered.contains("<redacted>"));
+        assert!(!rendered.contains("secret"));
+    }
+
+    #[test]
+    fn clear_secret_removes_password_value() {
+        let mut request = AuthRequest::new("alice", "secret");
+
+        request.clear_secret();
+
+        assert!(request.password.is_empty());
     }
 }
 
