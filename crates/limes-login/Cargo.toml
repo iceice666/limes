@@ -9,8 +9,8 @@ version.workspace = true
 
 [dependencies]
 libc = "0.2"
-limes-common = { version = "0.1.1", path = "../limes-common" }
-limes-proto = { version = "0.1.1", path = "../limes-proto" }
+limes-common = { version = "0.2.0", path = "../limes-common" }
+limes-proto = { version = "0.2.0", path = "../limes-proto" }
 
 [lib]
 path = "src/lib.rs"

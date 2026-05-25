@@ -1692,7 +1692,7 @@ dependencies = [
 
 [[package]]
 name = "limes-common"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "libc",
  "limes-proto",
@@ -1701,7 +1701,7 @@ dependencies = [
 
 [[package]]
 name = "limes-lock"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "limes-common",
  "limes-proto",
@@ -1711,7 +1711,7 @@ dependencies = [
 
 [[package]]
 name = "limes-login"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "libc",
  "limes-common",
@@ -1720,14 +1720,14 @@ dependencies = [
 
 [[package]]
 name = "limes-proto"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "zeroize",
 ]
 
 [[package]]
 name = "limes-simple-lock"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "iced",
  "iced_layershell",

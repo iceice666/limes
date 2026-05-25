@@ -9,7 +9,7 @@ version.workspace = true
 
 [dependencies]
 libc = "0.2"
-limes-proto = { version = "0.1.1", path = "../limes-proto" }
+limes-proto = { version = "0.2.0", path = "../limes-proto" }
 zeroize = "1.8"
 
 [lib]
