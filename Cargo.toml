@@ -7,7 +7,17 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
+homepage = "https://github.com/iceice666/limes"
 license = "MIT OR Apache-2.0"
+readme = "README.md"
 repository = "https://github.com/iceice666/limes"
 rust-version = "1.94"
 version = "0.2.0"
+
+[workspace.dependencies]
+libc = "0.2"
+limes-common = { version = "0.2.0", path = "crates/limes-common" }
+limes-proto = { version = "0.2.0", path = "crates/limes-proto" }
+smithay-client-toolkit = "0.19"
+wayland-client = "0.31"
+zeroize = "1.8"

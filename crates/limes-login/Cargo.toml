@@ -1,16 +1,21 @@
 [package]
 name = "limes-login"
 description = "Login manager/session-launch library for limes frontends."
+categories = ["authentication", "os::unix-apis"]
+documentation = "https://docs.rs/limes-login"
 edition.workspace = true
+homepage.workspace = true
+keywords = ["login", "pam", "session", "display-manager"]
 license.workspace = true
+readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-libc = "0.2"
-limes-common = { version = "0.2.0", path = "../limes-common" }
-limes-proto = { version = "0.2.0", path = "../limes-proto" }
+libc.workspace = true
+limes-common.workspace = true
+limes-proto.workspace = true
 
 [lib]
 path = "src/lib.rs"

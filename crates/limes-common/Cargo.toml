@@ -1,16 +1,21 @@
 [package]
 name = "limes-common"
 description = "Shared authentication, config, events, and errors for limes crates."
+categories = ["authentication", "os::unix-apis"]
+documentation = "https://docs.rs/limes-common"
 edition.workspace = true
+homepage.workspace = true
+keywords = ["login", "pam", "screenlock", "wayland"]
 license.workspace = true
+readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-libc = "0.2"
-limes-proto = { version = "0.2.0", path = "../limes-proto" }
-zeroize = "1.8"
+libc.workspace = true
+limes-proto.workspace = true
+zeroize.workspace = true
 
 [lib]
 path = "src/lib.rs"

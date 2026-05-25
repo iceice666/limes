@@ -1,17 +1,22 @@
 [package]
 name = "limes-lock"
 description = "Screenlock library for limes frontends."
+categories = ["authentication", "gui", "os::unix-apis"]
+documentation = "https://docs.rs/limes-lock"
 edition.workspace = true
+homepage.workspace = true
+keywords = ["screenlock", "lockscreen", "pam", "wayland"]
 license.workspace = true
+readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-limes-common = { version = "0.2.0", path = "../limes-common" }
-limes-proto = { version = "0.2.0", path = "../limes-proto" }
-smithay-client-toolkit = "0.19"
-wayland-client = "0.31"
+limes-common.workspace = true
+limes-proto.workspace = true
+smithay-client-toolkit.workspace = true
+wayland-client.workspace = true
 
 [lib]
 path = "src/lib.rs"
