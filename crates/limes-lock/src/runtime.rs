@@ -6,8 +6,8 @@ use limes_common::{
 };
 use limes_proto::{AuthOutcome, AuthRequest};
 
-use crate::lock::{DisplayBackend, LockManager};
-use crate::wayland_lock::WaylandSessionLockBackend;
+use crate::display::{DisplayBackend, WaylandSessionLockBackend};
+use crate::manager::LockManager;
 
 pub struct LockRuntime {
     config: Config,
