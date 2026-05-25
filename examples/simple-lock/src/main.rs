@@ -1,100 +1,77 @@
-use std::sync::Arc;
+use std::{process, sync::Arc};
 
 use iced::{
     Alignment, Element, Length, Task,
     widget::{button, column, container, row, text, text_input},
+    window,
 };
-use iced_layershell::{
-    actions::LayerShellCustomActionWithId,
-    application,
-    reexport::Anchor,
-    settings::{LayerShellSettings, Settings},
-};
+use iced_sessionlock::{actions::UnLockAction, application};
 use limes_lock::{
     AuthFailure as ProtoAuthFailure, AuthOutcome, AuthRequest, LockRuntime, LockState,
     StderrEventSink,
 };
 
-fn main() -> iced_layershell::Result {
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("limes-simple-lock: {error}");
+        process::exit(1);
+    }
+}
+
+fn run() -> Result<(), String> {
+    let runtime = Arc::new(
+        LockRuntime::from_env()
+            .map_err(|error| format!("cannot initialize limes lock runtime: {error}"))?,
+    );
+    runtime.events().subscribe(Arc::new(StderrEventSink));
+
     application(
-        SimpleLock::new,
-        || "limes simple lock".to_owned(),
+        move || SimpleLock::new(Arc::clone(&runtime)),
         SimpleLock::update,
         SimpleLock::view,
     )
-    .settings(Settings {
-        layer_settings: LayerShellSettings {
-            anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
-            ..Default::default()
-        },
-        ..Default::default()
-    })
     .run()
+    .map_err(|error| error.to_string())
 }
 
 struct SimpleLock {
-    runtime: Option<Arc<LockRuntime>>,
+    runtime: Arc<LockRuntime>,
     username: String,
     password: String,
     state: LockState,
     status: String,
     authenticating: bool,
-    lock_frontend: bool,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     PasswordChanged(String),
-    Lock,
     Submit,
     AuthFinished(AuthOutcome),
+    UnlockSession,
 }
 
-impl TryFrom<Message> for LayerShellCustomActionWithId {
+impl TryFrom<Message> for UnLockAction {
     type Error = Message;
 
     fn try_from(value: Message) -> std::result::Result<Self, Self::Error> {
-        Err(value)
+        match value {
+            Message::UnlockSession => Ok(UnLockAction),
+            other => Err(other),
+        }
     }
 }
 
 impl SimpleLock {
-    fn new() -> (Self, Task<Message>) {
-        let lock_frontend = matches!(std::env::args().nth(1).as_deref(), Some("lock"));
-        let runtime = LockRuntime::from_env().ok().map(Arc::new);
-
-        let (initial_state, status) = if let Some(runtime) = &runtime {
-            runtime.events().subscribe(Arc::new(StderrEventSink));
-            if lock_frontend {
-                match runtime.lock_now() {
-                    Ok(()) => (
-                        LockState::Locked,
-                        "Locked. Enter your PAM password and press Enter to unlock.".to_owned(),
-                    ),
-                    Err(error) => (LockState::Unlocked, format!("Could not lock: {error}")),
-                }
-            } else {
-                (
-                    LockState::Unlocked,
-                    "Runtime ready. Press \"Lock again\" to begin a lock test.".to_owned(),
-                )
-            }
-        } else {
-            (
-                LockState::Unlocked,
-                "Runtime unavailable. Cannot initialize lock backend.".to_owned(),
-            )
-        };
-
+    fn new(runtime: Arc<LockRuntime>) -> (Self, Task<Message>) {
         (
             Self {
                 runtime,
                 username: std::env::var("USER").unwrap_or_default(),
                 password: String::new(),
-                state: initial_state,
-                status,
+                state: LockState::Locked,
+                status: "Enter your PAM password and press Enter to unlock.".to_owned(),
                 authenticating: false,
-                lock_frontend,
             },
             Task::none(),
         )
@@ -106,34 +83,12 @@ impl SimpleLock {
                 self.password = password;
                 Task::none()
             }
-            Message::Lock => {
-                if self.runtime.is_none() {
-                    self.status = "Runtime unavailable; lock not possible.".to_owned();
-                    return Task::none();
-                }
-
-                self.password.clear();
-                let runtime = Arc::clone(self.runtime.as_ref().expect("runtime present"));
-                match runtime.lock_now() {
-                    Ok(()) => {
-                        self.state = LockState::Locked;
-                        self.status =
-                            "Locked. Enter your password and press Enter to unlock.".to_owned();
-                    }
-                    Err(error) => {
-                        self.state = LockState::Unlocked;
-                        self.status = format!("Could not lock: {error}");
-                    }
-                }
-                Task::none()
-            }
             Message::Submit => {
-                if self.runtime.is_none() || self.authenticating || self.state != LockState::Locked
-                {
+                if self.authenticating || self.state != LockState::Locked {
                     return Task::none();
                 }
 
-                let runtime = Arc::clone(self.runtime.as_ref().expect("runtime present"));
+                let runtime = Arc::clone(&self.runtime);
                 let username = self.username.clone();
                 let password = std::mem::take(&mut self.password);
                 self.authenticating = true;
@@ -142,10 +97,18 @@ impl SimpleLock {
 
                 Task::perform(
                     async move {
-                        let mut request = AuthRequest::new(username, password);
-                        let outcome = runtime.unlock(&request);
-                        request.clear_secret();
-                        outcome
+                        tokio::task::spawn_blocking(move || {
+                            let mut request = AuthRequest::new(username, password);
+                            let outcome = runtime.authenticate_unlock(&request);
+                            request.clear_secret();
+                            outcome
+                        })
+                        .await
+                        .unwrap_or_else(|error| {
+                            Err(ProtoAuthFailure::Internal(format!(
+                                "authentication task failed: {error}"
+                            )))
+                        })
                     },
                     Message::AuthFinished,
                 )
@@ -157,6 +120,7 @@ impl SimpleLock {
                         self.state = LockState::Unlocked;
                         self.status =
                             format!("Unlocked as {} (uid {}).", success.username, success.uid);
+                        return Task::done(Message::UnlockSession);
                     }
                     Err(error) => {
                         self.state = LockState::Locked;
@@ -165,13 +129,14 @@ impl SimpleLock {
                 }
                 Task::none()
             }
+            Message::UnlockSession => Task::none(),
         }
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    fn view(&self, _window: window::Id) -> Element<'_, Message> {
         let title = text("limes simple lock").size(36);
         let warning = text(
-            "Uses Wayland ext-session-lock-v1 via limes-lock. The compositor lock surface is currently delegated to the frontend.",
+            "Uses Wayland ext-session-lock-v1 through iced_sessionlock. limes authenticates the unlock request.",
         )
         .size(16);
         let state = text(format!("State: {}", self.state)).size(20);
@@ -192,18 +157,7 @@ impl SimpleLock {
             button("Unlock").on_press(Message::Submit)
         };
 
-        let lock_again = if self.state == LockState::Unlocked {
-            button("Lock again").on_press(Message::Lock)
-        } else {
-            button("Lock again")
-        };
-
-        let controls = if self.lock_frontend {
-            row![unlock]
-        } else {
-            row![unlock, lock_again]
-        }
-        .spacing(12);
+        let controls = row![unlock].spacing(12);
 
         let content = column![title, warning, state, username, password, controls, status]
             .spacing(16)

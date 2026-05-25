@@ -10,5 +10,6 @@ publish = false
 
 [dependencies]
 iced = { version = "0.14", features = ["tokio"] }
-iced_layershell = "0.18"
+iced_sessionlock = "0.18"
 limes-lock = { path = "../../crates/limes-lock" }
+tokio = { version = "1", features = ["rt"] }

@@ -12,8 +12,8 @@ backend pieces they need:
 - `limes-login`: login authentication orchestration, PAM session open/close,
   user session launch, and session discovery.
 - `limes-proto`: lightweight shared types/events for frontends and backend code.
-- `examples/simple-lock`: minimal iced/layer-shell API/authentication demo using
-  `limes-lock` only for limes APIs.
+- `examples/simple-lock`: minimal iced session-lock frontend using
+  `limes-lock` for PAM-backed unlock authentication.
 
 The full-screen iced session-lock frontend that renders directly on Wayland
 `ext-session-lock-v1` lock surfaces now lives in
@@ -55,7 +55,7 @@ Configure `/etc/pam.d/limes` before testing PAM-backed auth. Then run the local
 minimal lock API/authentication smoke test:
 
 ```sh
-cargo run -p limes-simple-lock -- lock
+cargo run -p limes-simple-lock
 ```
 
 For a full-screen Wayland session-lock frontend, see

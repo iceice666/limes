@@ -1327,46 +1327,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iced_layershell"
-version = "0.18.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79bb5126427f0d16c37f0336a4c2c800b428c3438e244e75322de8e671b51a5d"
-dependencies = [
- "enumflags2",
- "futures",
- "iced_core",
- "iced_debug",
- "iced_devtools",
- "iced_exdevtools",
- "iced_futures",
- "iced_graphics",
- "iced_layershell_macros",
- "iced_program",
- "iced_renderer",
- "iced_runtime",
- "layershellev",
- "log",
- "mundy",
- "smol_str 0.2.2",
- "thiserror 2.0.18",
- "tracing",
- "window_clipboard",
-]
-
-[[package]]
-name = "iced_layershell_macros"
-version = "0.18.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d591978798f06cc6b46fee575174decf7d33e96977829153e104c1b265e7633"
-dependencies = [
- "darling",
- "manyhow",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "iced_program"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1400,6 +1360,44 @@ dependencies = [
  "iced_futures",
  "raw-window-handle",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "iced_sessionlock"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5eb546a57f785dcbb7e6976b586f5454193a84c667f2c2f9bbd6a766d435490"
+dependencies = [
+ "futures",
+ "iced_core",
+ "iced_debug",
+ "iced_exdevtools",
+ "iced_futures",
+ "iced_graphics",
+ "iced_program",
+ "iced_renderer",
+ "iced_runtime",
+ "iced_sessionlock_macros",
+ "log",
+ "mundy",
+ "sessionlockev",
+ "smol_str 0.2.2",
+ "thiserror 2.0.18",
+ "tracing",
+ "window_clipboard",
+]
+
+[[package]]
+name = "iced_sessionlock_macros"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d1e0b116bb50560f715a272ef8046890918550d2c23d067bfb7c688c0a06258"
+dependencies = [
+ "darling",
+ "manyhow",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1620,28 +1618,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "layershellev"
-version = "0.18.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88f48eaa0c702d491d6411620eca91eae3beecc018e79402708f97e1cc948ad8"
-dependencies = [
- "calloop 0.14.4",
- "calloop-wayland-source 0.4.1",
- "log",
- "raw-window-handle",
- "smithay-client-toolkit 0.20.0",
- "tempfile",
- "thiserror 2.0.18",
- "waycrate_xkbkeycode",
- "wayland-backend",
- "wayland-client",
- "wayland-cursor",
- "wayland-protocols",
- "wayland-protocols-misc",
- "wayland-protocols-wlr",
-]
-
-[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1730,8 +1706,9 @@ name = "limes-simple-lock"
 version = "0.2.0"
 dependencies = [
  "iced",
- "iced_layershell",
+ "iced_sessionlock",
  "limes-lock",
+ "tokio",
 ]
 
 [[package]]
@@ -2812,6 +2789,28 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "sessionlockev"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1988e748177f4d3ba7e1cc85b44727e1f011a699c8f3f165e4b5f81f3d76912"
+dependencies = [
+ "calloop 0.14.4",
+ "calloop-wayland-source 0.4.1",
+ "log",
+ "raw-window-handle",
+ "smithay-client-toolkit 0.20.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "waycrate_xkbkeycode",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-cursor",
+ "wayland-protocols",
+ "wayland-protocols-misc",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]
